@@ -101,7 +101,7 @@ function recordCreate(client, record, result) {
             if (dataOpsResult.ok && !dataOpsResult.value) {
                 throw [
                     g_lib.ERR_INVALID_OPERATION,
-                    "Data uploads not supported for metadata-only repository",
+                    `Data uploads not supported for ${repository.type} repository`,
                     {
                         repo_type: repository.type,
                         repo_id: repository.data._id,

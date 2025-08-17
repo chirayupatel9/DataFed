@@ -961,7 +961,7 @@ module.exports = (function () {
             if (dataOpsResult.ok && !dataOpsResult.value) {
                 throw [
                     obj.ERR_INVALID_OPERATION,
-                    "Data operations not supported for metadata-only repository",
+                    `Data operations not supported for ${repository.type} repository`,
                     {
                         repo_type: repository.type,
                         repo_id: repository.data._id,
