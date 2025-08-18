@@ -1,0 +1,170 @@
+syntax = "proto2";
+
+package SDMS;
+
+// ============================ Enums
+
+// Used to return error categories. Likely to be deprecated.
+enum ErrorCode
+{
+    ID_BAD_REQUEST              = 1;
+    ID_INTERNAL_ERROR           = 2;
+    ID_CLIENT_ERROR             = 3;
+    ID_SERVICE_ERROR            = 4;
+    ID_AUTHN_REQUIRED           = 5;
+    ID_AUTHN_ERROR              = 6;
+    ID_DEST_PATH_ERROR          = 7;
+    ID_DEST_FILE_ERROR          = 8;
+}
+
+// Used to return status of backend services. Likely to be deprecated.
+enum ServiceStatus
+{
+    SS_NORMAL       = 0;
+    SS_DEGRADED     = 1;
+    SS_FAILED       = 2;
+    SS_OFFLINE      = 3;
+}
+
+// Used to specify data or collection search mode in queries
+enum SearchMode
+{
+    SM_DATA         = 0;
+    SM_COLLECTION   = 1;
+}
+
+// Used to specify dependency relationships. Likely to be deprecated and replaced with expandable system.
+enum DependencyType
+{
+    DEP_IS_DERIVED_FROM         = 0;
+    DEP_IS_COMPONENT_OF         = 1;
+    DEP_IS_NEW_VERSION_OF       = 2;
+    DEP_TYPE_COUNT              = 3;
+}
+
+// Used to indicate dependency direction (IN = offspring, OUT = ancestor)
+// Note that records only store outgoing dependencies to ancestors
+enum DependencyDir
+{
+    DEP_IN                      = 0;
+    DEP_OUT                     = 1;
+}
+
+// General record/collection sorting options
+enum SortOption
+{
+    SORT_ID                     = 0;
+    SORT_TITLE                  = 1;
+    SORT_OWNER                  = 2;
+    SORT_TIME_CREATE            = 3;
+    SORT_TIME_UPDATE            = 4;
+    SORT_RELEVANCE              = 5;
+}
+
+// Defines a users role in a project
+// Note that project owners are treated as project admins
+enum ProjectRole
+{
+    PROJ_NO_ROLE    = 0;
+    PROJ_MEMBER     = 1;
+    PROJ_MANAGER    = 2;
+    PROJ_ADMIN      = 3;
+}
+
+// Used to specify type of access token contained within message
+enum AccessTokenType {
+    GENERIC = 1;
+    GLOBUS = 2;
+    GLOBUS_AUTH = 3;
+    GLOBUS_TRANSFER = 4;
+    GLOBUS_DEFAULT = 5;
+    ACCESS_SENTINEL = 255;
+}
+
+// ============================ Data Structures
+
+// Allocation-specific statistics data
+message AllocStatsData
+{
+    required string             repo        = 1;
+    required uint32             rec_count   = 2;
+    required uint32             file_count  = 3;
+    required uint64             data_size   = 4;
+    repeated uint32             histogram   = 5;
+}
+
+message AllocData
+{
+    required string             repo        = 1;
+    required uint64             data_limit  = 2;
+    required uint64             data_size   = 3;
+    required uint32             rec_limit   = 4;
+    required uint32             rec_count   = 5;
+    required string             path        = 6;
+    optional string             id          = 7;
+    optional bool               is_def      = 8;
+    optional AllocStatsData     stats       = 9;
+}
+
+// For viewing dependencies
+message DependencyData
+{
+    required string             id          = 1;
+    optional string             alias       = 2;
+    optional uint32             notes       = 3;
+    required DependencyType     type        = 4;
+    required DependencyDir      dir         = 5;
+}
+
+// For specifying dependencies
+message DependencySpecData
+{
+    required string             id          = 1;
+    required DependencyType     type        = 2;
+}
+
+message UserData
+{
+    required string             uid             = 1;
+    required string             name_last       = 2;
+    required string             name_first      = 3;
+    optional string             email           = 4;
+    optional string             options         = 5;
+    optional bool               is_admin        = 6;
+    optional bool               is_repo_admin   = 7;
+    repeated string             ident           = 8;
+    repeated AllocData          alloc           = 9;
+}
+
+message ProjectData
+{
+    required string             id          = 1;
+    required string             title       = 2;
+    optional string             desc        = 3;
+    optional string             owner       = 4;
+    optional uint32             ct          = 5;
+    optional uint32             ut          = 6;
+    repeated string             admin       = 7;
+    repeated string             member      = 8;
+    repeated AllocData          alloc       = 9;
+}
+
+message ListingData
+{
+    required string             id          = 1;
+    required string             title       = 2;
+    optional string             alias       = 3;
+    optional bool               locked      = 4;
+    optional string             owner       = 5;
+    optional string             creator     = 6;
+    optional double             size        = 7;
+    optional bool               external    = 8;
+    optional uint32             notes       = 9;
+    // Needed for provenance graphing
+    optional int32              gen         = 10;
+    optional bool               deps_avail  = 11;
+    repeated DependencyData     dep         = 12;
+    // Needed for catalog view
+    optional string             owner_name  = 13;
+    optional string             desc        = 14;
+}
