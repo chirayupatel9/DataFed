@@ -1,0 +1,24 @@
+[package]
+name = "repo-server-rs"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+
+[build-dependencies]
+bindgen = "0.69"
+cc = "1"
+cxx-build = "1.0"
+
+[dependencies]
+cxx = "1.0"
+clap = { version = "4", features = ["derive"] }
+thiserror = "1"
+anyhow = "1"
+parking_lot = "0.12"
+bytes = "1"
+chrono = { version = "0.4", default-features = false, features=["clock"] }
+
+[dependencies.tokio]
+version = "1"
+features = ["rt-multi-thread", "macros", "time"]

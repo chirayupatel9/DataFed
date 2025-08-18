@@ -249,21 +249,21 @@ void Server::checkServerVersion() {
 }
 
 void Server::loadKeys() {
-  string fname = m_config.cred_dir + "datafed-repo-key.pub";
+  string fname = m_config.cred_dir + "mock-datafed-core-key.pub";
   ifstream inf(fname.c_str());
   if (!inf.is_open() || !inf.good())
     EXCEPT_PARAM(1, "Could not open file: " << fname);
   inf >> m_pub_key;
   inf.close();
 
-  fname = m_config.cred_dir + "datafed-repo-key.priv";
+  fname = m_config.cred_dir + "mock-datafed-core-key.priv";
   inf.open(fname.c_str());
   if (!inf.is_open() || !inf.good())
     EXCEPT_PARAM(1, "Could not open file: " << fname);
   inf >> m_priv_key;
   inf.close();
 
-  fname = m_config.cred_dir + "datafed-core-key.pub";
+  fname = m_config.cred_dir + "mock-datafed-core-key.pub";
   inf.open(fname.c_str());
   if (!inf.is_open() || !inf.good())
     EXCEPT_PARAM(1, "Could not open file: " << fname);

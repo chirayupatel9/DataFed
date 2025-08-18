@@ -25,8 +25,8 @@ struct Config {
   Config() {}
 
   std::string globus_collection_path;
-  std::string core_server = "tcp://datafed.ornl.gov:7512";
-  std::string cred_dir = "/opt/datafed/keys";
+  std::string core_server = "tcp://localhost:9998";
+  std::string cred_dir = "./";
   uint16_t port = 9000;
   uint32_t timeout = 5;
   uint32_t num_req_worker_threads = 4;
