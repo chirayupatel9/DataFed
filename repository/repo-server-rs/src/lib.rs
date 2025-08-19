@@ -1,3 +1,6 @@
+// Configuration management
+pub mod config;
+
 // Protocol Buffer definitions
 pub mod proto;
 

@@ -11,9 +11,10 @@ use crate::zmq_communicator::{
 };
 use crate::request_worker::RequestWorker;
 use crate::proto::version;
+
 use prost::Message;
 
-/// Repository server configuration
+/// Repository server configuration (legacy struct for backward compatibility)
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub port: u16,
@@ -31,6 +32,18 @@ impl Default for ServerConfig {
             core_server: "tcp://localhost:9998".to_string(),
             globus_collection_path: "/mnt/datafed-repo".to_string(),
             cred_dir: "/mnt/storage/rust/Datafed/".to_string(),
+        }
+    }
+}
+
+impl From<crate::config::ServerConfig> for ServerConfig {
+    fn from(config: crate::config::ServerConfig) -> Self {
+        Self {
+            port: config.port,
+            num_worker_threads: config.num_worker_threads,
+            core_server: config.core_server,
+            globus_collection_path: config.globus_collection_path,
+            cred_dir: config.cred_dir,
         }
     }
 }

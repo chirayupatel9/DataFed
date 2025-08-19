@@ -126,14 +126,76 @@ cargo run --example basic_client
 
 ## Configuration
 
-The server can be configured via command-line arguments:
+The server can be configured using a TOML configuration file, with command-line arguments as overrides.
 
-- `--port`: Server port (default: 7512)
-- `--threads`: Number of worker threads (default: 4)
-- `--core-server`: Core server address (default: tcp://localhost:7512)
-- `--globus-path`: Globus collection path (default: /mnt/datafed-repo)
-- `--cred-dir`: Credentials directory (default: ./)
-- `--log-level`: Logging level (default: info)
+### Configuration File
+
+The server looks for configuration in the following order:
+1. `config.toml` in the current directory
+2. `/etc/datafed/repo-server.toml`
+3. `~/.config/datafed/repo-server.toml`
+4. Default values if no config file is found
+
+### Example Configuration
+
+```toml
+[server]
+port = 10000
+num_worker_threads = 4
+core_server = "tcp://localhost:9998"
+globus_collection_path = "/mnt/datafed-repo"
+cred_dir = "/mnt/storage/rust/DataFed/"
+
+[logging]
+level = "info"
+console = true
+file = false
+
+[zmq]
+receive_timeout_ms = 5000
+poll_timeout_ms = 10
+debug = false
+
+[security]
+curve_enabled = false
+public_key = "your-public-key"
+private_key = "your-private-key"
+
+[performance]
+max_message_size = 1048576
+worker_idle_timeout = 300
+connection_pooling = true
+
+[monitoring]
+metrics_enabled = false
+health_check_enabled = false
+health_check_port = 10001
+```
+
+### Command-Line Arguments
+
+Command-line arguments override configuration file values:
+
+- `--port`: Server port (overrides config)
+- `--threads`: Number of worker threads (overrides config)
+- `--core-server`: Core server address (overrides config)
+- `--globus-path`: Globus collection path (overrides config)
+- `--cred-dir`: Credentials directory (overrides config)
+- `--log-level`: Logging level (overrides config)
+
+### Development Configuration
+
+For development, you can copy `config-dev.toml` to `config.toml` to get development-friendly settings:
+
+```bash
+cp config-dev.toml config.toml
+```
+
+The development configuration includes:
+- Debug logging enabled
+- Shorter timeouts for faster iteration
+- Development-friendly paths (`/tmp/...`)
+- Health check endpoint enabled
 
 ## Mock Credentials
 

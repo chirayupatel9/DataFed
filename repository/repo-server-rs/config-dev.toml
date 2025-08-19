@@ -1,0 +1,53 @@
+# Development Configuration for DataFed Repository Server
+# Copy this to config.toml to use it
+
+[server]
+# Server port
+port = 10000
+
+# Number of worker threads
+num_worker_threads = 2
+
+# Core server address
+core_server = "tcp://localhost:9998"
+
+# Globus collection path
+globus_collection_path = "/tmp/datafed-repo-dev"
+
+# Credentials directory
+cred_dir = "/tmp/datafed-credentials"
+
+[logging]
+# Log level for development
+level = "debug"
+
+# Enable console logging
+console = true
+
+# Disable file logging for development
+file = false
+
+[zmq]
+# Shorter timeouts for development
+receive_timeout_ms = 2000
+poll_timeout_ms = 5
+
+# Enable debug logging for ZeroMQ operations
+debug = true
+
+[security]
+# Disable Curve security for development
+curve_enabled = false
+
+[performance]
+# Smaller message size for development
+max_message_size = 524288
+
+# Shorter worker timeout for development
+worker_idle_timeout = 60
+
+[monitoring]
+# Enable health check for development
+health_check_enabled = true
+health_check_port = 10001
+

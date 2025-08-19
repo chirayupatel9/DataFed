@@ -157,6 +157,7 @@ pub struct ProtoMessage {
     pub payload: Vec<u8>,
     pub message_type: u16,
     pub proto_id: u8,
+    pub key: String, // Add key field for authentication
 }
 
 impl ProtoMessage {
@@ -167,6 +168,18 @@ impl ProtoMessage {
             payload,
             message_type,
             proto_id,
+            key: "anon".to_string(), // Default to anonymous key
+        }
+    }
+
+    pub fn new_with_key(correlation_id: String, state: MessageState, payload: Vec<u8>, message_type: u16, proto_id: u8, key: String) -> Self {
+        Self {
+            correlation_id,
+            state,
+            payload,
+            message_type,
+            proto_id,
+            key,
         }
     }
 
@@ -174,7 +187,8 @@ impl ProtoMessage {
         match attr {
             MessageAttribute::CorrelationId => Some(self.correlation_id.clone()),
             MessageAttribute::State => Some(format!("{:?}", self.state)),
-            _ => None,
+            MessageAttribute::Key => Some(self.key.clone()),
+            MessageAttribute::Id => Some("anon".to_string()), // Default to anonymous ID
         }
     }
 
@@ -363,7 +377,7 @@ impl ZeroMQCommunicator {
         match message_type {
             MessageType::GoogleProtocolBuffer => {
                 // Receive correlation ID (for ROUTER sockets)
-                let correlation_id = if let SocketClassType::Server = self.options.class_type {
+                let correlation_id = if let SocketClassType::Server = self.options.class_type { 
                     match self.socket.recv_string(0) {
                         Ok(Ok(id)) => id,
                         Ok(Err(_)) => {
@@ -518,12 +532,13 @@ impl MessageFactory {
         let request = version::VersionRequest {};
         let payload = request.encode_to_vec();
         
-        ProtoMessage::new(
+        ProtoMessage::new_with_key(
             Uuid::new_v4().to_string(),
             MessageState::Request,
             payload,
             1, // Version request type
             1, // Anonymous protocol ID
+            "anon".to_string(), // Anonymous key for authentication
         )
     }
     
@@ -543,12 +558,13 @@ impl MessageFactory {
         };
         let payload = reply.encode_to_vec();
         
-        ProtoMessage::new(
-            correlation_id,
+        ProtoMessage::new_with_key(
+            correlation_id.clone(),
             MessageState::Response,
             payload,
             2, // Version reply type
             1, // Anonymous protocol ID
+            correlation_id, // Use correlation_id as key for response
         )
     }
     
@@ -559,12 +575,13 @@ impl MessageFactory {
         };
         let payload = request.encode_to_vec();
         
-        ProtoMessage::new(
+        ProtoMessage::new_with_key(
             Uuid::new_v4().to_string(),
             MessageState::Request,
             payload,
             3, // Repo data delete request type
             2, // Auth protocol ID
+            "anon".to_string(), // Anonymous key for authentication
         )
     }
     
@@ -575,12 +592,13 @@ impl MessageFactory {
         };
         let payload = request.encode_to_vec();
         
-        ProtoMessage::new(
+        ProtoMessage::new_with_key(
             Uuid::new_v4().to_string(),
             MessageState::Request,
             payload,
             4, // Repo data get size request type
             2, // Auth protocol ID
+            "anon".to_string(), // Anonymous key for authentication
         )
     }
     
@@ -590,12 +608,13 @@ impl MessageFactory {
         };
         let payload = request.encode_to_vec();
         
-        ProtoMessage::new(
+        ProtoMessage::new_with_key(
             Uuid::new_v4().to_string(),
             MessageState::Request,
             payload,
             5, // Repo path create request type
             2, // Auth protocol ID
+            "anon".to_string(), // Anonymous key for authentication
         )
     }
     
@@ -605,12 +624,13 @@ impl MessageFactory {
         };
         let payload = request.encode_to_vec();
         
-        ProtoMessage::new(
+        ProtoMessage::new_with_key(
             Uuid::new_v4().to_string(),
             MessageState::Request,
             payload,
             6, // Repo path delete request type
             2, // Auth protocol ID
+            "anon".to_string(), // Anonymous key for authentication
         )
     }
     
@@ -620,12 +640,13 @@ impl MessageFactory {
         };
         let payload = reply.encode_to_vec();
         
-        ProtoMessage::new(
-            correlation_id,
+        ProtoMessage::new_with_key(
+            correlation_id.clone(),
             MessageState::Response,
             payload,
             7, // Ack reply type
             2, // Auth protocol ID
+            correlation_id, // Use correlation_id as key for response
         )
     }
     
@@ -636,12 +657,13 @@ impl MessageFactory {
         };
         let payload = reply.encode_to_vec();
         
-        ProtoMessage::new(
-            correlation_id,
+        ProtoMessage::new_with_key(
+            correlation_id.clone(),
             MessageState::Response,
             payload,
             8, // Nack reply type
             2, // Auth protocol ID
+            correlation_id, // Use correlation_id as key for response
         )
     }
 }
