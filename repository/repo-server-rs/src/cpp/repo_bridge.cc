@@ -58,10 +58,16 @@ namespace RepoBridge {
 
   CredentialFactory cred_factory;
   auto local_sec_ctx = cred_factory.create(ProtocolType::ZQTP, local_keys);
-
+  static URIScheme parse_scheme(const std::string& scheme) {
+    if (scheme == "tcp")   return URIScheme::TCP;
+    if (scheme == "ipc")   return URIScheme::IPC;
+    if (scheme == "inproc")return URIScheme::INPROC;
+    // fallback
+    return URIScheme::TCP;
+  }
   // 2) Build a secure client communicator
   SocketOptions opt;
-  opt.scheme                = URIScheme::TCP;
+  opt.scheme                = parse_scheme(scheme_s);
   opt.class_type            = SocketClassType::CLIENT;
   opt.direction_type        = SocketDirectionalityType::BIDIRECTIONAL;
   opt.communication_type    = SocketCommunicationType::ASYNCHRONOUS;

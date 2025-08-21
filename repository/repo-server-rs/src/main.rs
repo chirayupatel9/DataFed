@@ -20,7 +20,7 @@ fn main() {
         correlation_id: "abc-123".to_string(),
         thread_id: std::process::id() as i32,
     };
-    let addr = "tcp://localhost:9998";        // whatever your core address is
+    let addr = "tcp://localhost:9999";        // whatever your core address is
     let parts: Vec<&str> = addr.split("://").collect();
     let scheme = parts[0];
     let host_port = parts[1];
@@ -44,7 +44,21 @@ fn main() {
     //     vi.release_hour, vi.release_minute
     // );
 
-
+    dl_info!(
+        ctx,
+        "Core API {}.{}.{} | Repo component {}.{}.{} | Release {}-{:02}-{:02} {:02}:{:02}",
+        vi.api_major, vi.api_minor, vi.api_patch,
+        vi.component_major, vi.component_minor, vi.component_patch,
+        vi.release_year, vi.release_month, vi.release_day,
+        vi.release_hour, vi.release_minute
+    );
+    println!(
+        "Core API {}.{}.{}  | Component {}.{}.{}  | Release {:04}-{:02}-{:02} {:02}:{:02}",
+        vi.api_major, vi.api_minor, vi.api_patch,
+        vi.component_major, vi.component_minor, vi.component_patch,
+        vi.release_year, vi.release_month, vi.release_day,
+        vi.release_hour, vi.release_minute
+    );
     println!("Scheme: {}", scheme);
     println!("Host: {}", host);
     println!("Port: {}", port);
