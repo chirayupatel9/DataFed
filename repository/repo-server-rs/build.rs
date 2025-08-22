@@ -9,6 +9,7 @@ fn main() {
         "src/cpp/sdms_dynalog_wrapper.cc",
         "src/cpp/DynaLog.cpp",
         "src/cpp/repo_bridge.cc",
+        "src/cpp/server_bridge.cc",
     ])
     .include("/opt/datafed/dependencies")
     .include("include")

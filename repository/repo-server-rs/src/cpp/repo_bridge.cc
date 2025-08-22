@@ -48,7 +48,6 @@ namespace RepoBridge {
 
   // Convert rust::Str to std::string as needed.
   const std::string host_s(host);
-  const std::string scheme_s(scheme);
   const std::string core_pub_s(core_public_key);
 
   // 1) Make a transient keypair and set the remote server’s public key
@@ -58,16 +57,17 @@ namespace RepoBridge {
 
   CredentialFactory cred_factory;
   auto local_sec_ctx = cred_factory.create(ProtocolType::ZQTP, local_keys);
-  static URIScheme parse_scheme(const std::string& scheme) {
-    if (scheme == "tcp")   return URIScheme::TCP;
-    if (scheme == "ipc")   return URIScheme::IPC;
-    if (scheme == "inproc")return URIScheme::INPROC;
-    // fallback
-    return URIScheme::TCP;
-  }
+  // static URIScheme parse_scheme(const std::string& scheme) {
+  //   if (scheme == "tcp")   return URIScheme::TCP;
+  //   if (scheme == "ipc")   return URIScheme::IPC;
+  //   if (scheme == "inproc")return URIScheme::INPROC;
+  //   // fallback
+  //   return URIScheme::TCP;
+  // }
+  const std::string scheme_s(scheme);
   // 2) Build a secure client communicator
   SocketOptions opt;
-  opt.scheme                = parse_scheme(scheme_s);
+  opt.scheme                = URIScheme::TCP;
   opt.class_type            = SocketClassType::CLIENT;
   opt.direction_type        = SocketDirectionalityType::BIDIRECTIONAL;
   opt.communication_type    = SocketCommunicationType::ASYNCHRONOUS;
