@@ -1,0 +1,20 @@
+# Address of the DataFed core (the server will connect to it)
+core_server = "tcp://127.0.0.1:9998"
+
+# Directory that contains the key files used by the sample server code:
+#   mock-datafed-repo-key.pub
+#   mock-datafed-repo-key.priv
+#   mock-datafed-core-key.pub
+cred_dir = "/mnt/storage/rust/DataFed/"
+
+# Repo server listen port
+port = 10000
+
+# Request timeout (ms)
+timeout = 20000
+
+# Number of worker threads to serve client requests
+num_req_worker_threads = 4
+
+# Optional
+globus_collection_path = ""
