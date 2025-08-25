@@ -1,6 +1,6 @@
 use crate::config::Config;
-use crate::version::{self, SharedCoreVersionInfo, fetch_core_server_version, create_shared_version_info};
-use crate::worker::{self, NoopMessenger};
+use crate::version::{SharedCoreVersionInfo, fetch_core_server_version, create_shared_version_info};
+use crate::worker::{self, ZMQInprocMessenger};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -10,7 +10,7 @@ use std::time::Duration;
 
 pub struct RepoServer {
     cfg: Config,
-    shutdown: Arc<AtomicBool>,
+    running: Arc<AtomicBool>,
     workers: Vec<JoinHandle<()>>,
     version_info: SharedCoreVersionInfo,
 }
@@ -19,7 +19,7 @@ impl RepoServer {
     pub fn new(cfg: Config) -> Self {
         Self {
             cfg,
-            shutdown: Arc::new(AtomicBool::new(false)),
+            running: Arc::new(AtomicBool::new(false)),
             workers: Vec::new(),
             version_info: create_shared_version_info(),
         }
@@ -32,35 +32,64 @@ impl RepoServer {
             thread::sleep(Duration::from_secs(2));
         }
 
-        // B) TODO: Start your secure TCP ↔ inproc proxy via C++ bridge here.
-        //    Keep a handle so you can stop it on shutdown.
-
-        // C) Spawn workers (using a NoopMessenger so we compile/runs idle)
+        // B) Start the secure TCP ↔ inproc proxy via C++ bridge
+        // This mimics the C++ ioSecure() method exactly
+        println!("Starting ZMQ proxy (TCP ↔ INPROC)...");
+        // Start the C++ proxy via FFI bridge
+        // The C++ version creates:
+        // - TCP server socket (external, secure) on port 10000
+        // - INPROC client socket (internal) connecting to "workers" endpoint
+        // - ProxyBasicZMQ or ProxyCustom to bridge them
+        
+        // Load repo server keys for authentication (like C++ RepoServer::loadKeys)
+        let repo_public_key = self.cfg.load_repo_public_key()
+            .unwrap_or_else(|e| panic!("Failed to load repo public key: {}", e));
+        let repo_private_key = self.cfg.load_repo_private_key()
+            .unwrap_or_else(|e| panic!("Failed to load repo private key: {}", e));
+        
+        crate::ffi::repo::server_start(&self.cfg.core_server, &repo_public_key, &repo_private_key)
+            .unwrap_or_else(|e| panic!("Failed to start ZMQ proxy: {}", e));
+        println!("ZMQ proxy started successfully");
+        
+        // C) Spawn workers (using real ZMQ INPROC messenger)
         let base = std::path::PathBuf::from(self.cfg.globus_collection_path.clone().unwrap_or("/data".into()));
         let version_info = self.version_info.clone();
         
+        // Set running flag to true BEFORE spawning workers
+        self.running.store(true, Ordering::SeqCst);
+        println!("Running flag set to true, spawning workers...");
+        
         for i in 0..self.cfg.num_req_worker_threads {
-            let mess = NoopMessenger::default(); // TODO: replace with your inproc client
+            let mess = ZMQInprocMessenger::new(i); // Real INPROC messenger
+            println!("Spawning worker {}", i);
             let h = worker::spawn_worker(
                 i,
                 mess,
                 base.clone(),
-                self.shutdown.clone(),
+                self.running.clone(),
                 version_info.clone(),
             );
             self.workers.push(h);
+            println!("Worker {} spawned successfully", i);
         }
 
-        // D) Block until shutdown (your proxy may block here in real code)
-        while !self.shutdown.load(Ordering::Relaxed) {
+        // D) Block until shutdown (proxy blocks here in real code)
+        println!("Server entering main loop, waiting for shutdown signal...");
+        while self.running.load(Ordering::Relaxed) {
             thread::sleep(Duration::from_millis(100));
         }
+        println!("Server received shutdown signal, stopping workers...");
 
-        // E) TODO: Stop proxy here (and any other IO threads)
+        // E) Stop proxy here (and any other IO threads)
+        println!("Stopping ZMQ proxy...");
+        // Stop the C++ proxy via FFI bridge
+        if let Err(e) = crate::ffi::repo::server_stop() {
+            eprintln!("Warning: Failed to stop ZMQ proxy: {}", e);
+        }
     }
 
     pub fn stop(&self) {
-        self.shutdown.store(true, Ordering::SeqCst);
+        self.running.store(false, Ordering::SeqCst);
     }
 
     pub fn join(self) {

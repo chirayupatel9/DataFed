@@ -17,7 +17,7 @@ namespace RepoBridge {
 }
 namespace ServerBridge {
     
-    void server_start(rust::Str config_path);  // throws on error
+    void server_start(rust::Str config_path, rust::Str repo_public_key, rust::Str repo_private_key);  // throws on error
     void server_stop();
     void server_join();
 } // namespace ServerBridge

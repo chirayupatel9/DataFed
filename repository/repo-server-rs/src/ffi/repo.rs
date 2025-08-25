@@ -19,6 +19,18 @@ mod ffi {
             timeout_ms: u32
         ) -> Result<VersionInfo>;
 
+        #[namespace = "ServerBridge"]
+        fn server_start(
+            config_path: &str,
+            repo_public_key: &str,
+            repo_private_key: &str
+        ) -> Result<()>;
+
+        #[namespace = "ServerBridge"]
+        fn server_stop() -> Result<()>;
+
+        #[namespace = "ServerBridge"]
+        fn server_join() -> Result<()>;
     }
 }
 pub use ffi::*;
