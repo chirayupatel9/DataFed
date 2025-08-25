@@ -6,6 +6,8 @@ use std::{
     time::Duration,
 };
 
+use crate::version::{VersionReply, SharedCoreVersionInfo};
+
 // ===== Envelope + Transport (kept minimal so it works today) =====
 #[derive(Debug, Clone)]
 pub struct Envelope {
@@ -42,8 +44,7 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
     messenger: M,
     base_path: impl Into<PathBuf>,
     running: Arc<AtomicBool>,
-    _repo_semver: (u32, u32, u32),
-    _api_version: (u32, u32),
+    version_info: SharedCoreVersionInfo,
 ) -> std::thread::JoinHandle<()> {
     let base_root = base_path.into();
 
@@ -60,8 +61,16 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
                     // - Unknown         -> NackReply (json payload with error)
                     let (reply_type, payload) = match env.msg_type {
                         MT_VERSION_REQUEST => {
-                            // TODO (later): fill with real VersionReply bytes (prost)
-                            (MT_VERSION_REPLY, Vec::new())
+                            // Use version info from core server if available, otherwise fall back to local
+                            let version_reply = {
+                                let info = version_info.read().unwrap();
+                                if info.is_connected {
+                                    info.version_reply.clone()
+                                } else {
+                                    VersionReply::new() // fallback to local version
+                                }
+                            };
+                            (MT_VERSION_REPLY, version_reply.to_bytes())
                         }
                         MT_REPO_DATA_DELETE_REQUEST => {
                             // TODO (later): parse env.payload to paths and delete under base_root

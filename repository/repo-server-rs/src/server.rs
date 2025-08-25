@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::version;
+use crate::version::{self, SharedCoreVersionInfo, fetch_core_server_version, create_shared_version_info};
 use crate::worker::{self, NoopMessenger};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -12,6 +12,7 @@ pub struct RepoServer {
     cfg: Config,
     shutdown: Arc<AtomicBool>,
     workers: Vec<JoinHandle<()>>,
+    version_info: SharedCoreVersionInfo,
 }
 
 impl RepoServer {
@@ -20,6 +21,7 @@ impl RepoServer {
             cfg,
             shutdown: Arc::new(AtomicBool::new(false)),
             workers: Vec::new(),
+            version_info: create_shared_version_info(),
         }
     }
 
@@ -35,6 +37,8 @@ impl RepoServer {
 
         // C) Spawn workers (using a NoopMessenger so we compile/runs idle)
         let base = std::path::PathBuf::from(self.cfg.globus_collection_path.clone().unwrap_or("/data".into()));
+        let version_info = self.version_info.clone();
+        
         for i in 0..self.cfg.num_req_worker_threads {
             let mess = NoopMessenger::default(); // TODO: replace with your inproc client
             let h = worker::spawn_worker(
@@ -42,8 +46,7 @@ impl RepoServer {
                 mess,
                 base.clone(),
                 self.shutdown.clone(),
-                (version::repo_major(), version::repo_minor(), version::repo_patch()),
-                (version::api_major(),  version::api_minor()),
+                version_info.clone(),
             );
             self.workers.push(h);
         }
@@ -69,36 +72,10 @@ impl RepoServer {
     pub fn cfg(&self) -> &Config { &self.cfg }
 
     fn core_handshake(&self) -> Result<(), String> {
-        // Parse tcp://host:port
-        let parts: Vec<&str> = self.cfg.core_server.split("://").collect();
-        if parts.len() != 2 { return Err("invalid core_server URI".into()); }
-        let scheme = parts[0];
-        let after = parts[1];
-        let mut split = after.split(':');
-        let host = split.next().unwrap_or("localhost");
-        let port: u16 = split.next().unwrap_or("9998").parse().map_err(|_| "bad core_server port")?;
-
-        // Core public key: if you have one, load it here (else empty)
-        let core_pub_key = "";
-
-        // Call your C++ bridge to send an anonymous VersionRequest
-        let v = unsafe {
-            crate::ffi::repo::send_version_request(host, port, scheme, core_pub_key, self.cfg.timeout)
-        };
-
-        // Perform compatibility checks if VersionInfo exposes fields.
-        // NOTE: If your VersionInfo has getters, adapt this accordingly.
-        let api_major_local = version::api_major();
-        let api_minor_local = version::api_minor();
-
-        // If your VersionInfo exposes api_major/api_minor, uncomment and use:
-        // if v.api_major != api_major_local {
-        //     return Err(format!("API major mismatch (core {} != local {})", v.api_major, api_major_local));
-        // }
-        // if v.api_minor < api_minor_local.saturating_sub(9) {
-        //     eprintln!("warning: core API minor {} is far behind local {}", v.api_minor, api_minor_local);
-        // }
-
-        Ok(())
+        // Use the new version management system to connect to core server
+        match fetch_core_server_version(&self.cfg.core_server, self.version_info.clone(), &self.cfg) {
+            Ok(()) => Ok(()),
+            Err(e) => Err(format!("Failed to connect to core server: {}", e)),
+        }
     }
 }
