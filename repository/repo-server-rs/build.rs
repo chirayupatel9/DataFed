@@ -9,7 +9,6 @@ fn main() {
         "src/cpp/sdms_dynalog_wrapper.cc",
         "src/cpp/DynaLog.cpp",
         "src/cpp/repo_bridge.cc",
-        "src/cpp/server_bridge.cc",
     ])
     .include("/opt/datafed/dependencies")
     .include("include")
@@ -19,6 +18,17 @@ fn main() {
 
     .flag_if_supported("-std=c++17")
     .compile("repo_bridge");
+
+    // add near the end of build.rs
+let pkg_ver = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into());
+let mut it = pkg_ver.split('.');
+let (maj, min, pat) = (it.next().unwrap_or("0"), it.next().unwrap_or("0"), it.next().unwrap_or("0"));
+println!("cargo:rustc-env=REPO_MAJOR={maj}");
+println!("cargo:rustc-env=REPO_MINOR={min}");
+println!("cargo:rustc-env=REPO_PATCH={pat}");
+// set these to your actual API version
+println!("cargo:rustc-env=API_MAJOR=1");
+println!("cargo:rustc-env=API_MINOR=0");
 
     // .include("common")
     // .include("/mnt/storage/datafed_rs/DataFed/common/include")
