@@ -22,6 +22,7 @@ OPTION(BUILD_CORE_SERVER "Build DataFed Core Server" TRUE)
 OPTION(BUILD_COMMON "Build DataFed common library" TRUE)
 OPTION(BUILD_DOCS "Build documentation" TRUE)
 OPTION(BUILD_FOXX "Build Foxx" TRUE)
+OPTION(BUILD_RUST "Build Rust components (requires Rust and Cargo)" FALSE)
 OPTION(BUILD_REPO_SERVER "Build DataFed Repo Server" FALSE)
 OPTION(BUILD_PYTHON_CLIENT "Build python client" TRUE)
 OPTION(BUILD_TESTS "Build Tests" TRUE)
@@ -39,6 +40,7 @@ OPTION(ENABLE_END_TO_END_API_TESTS "Enable end-to-end API testing" FALSE)
 OPTION(ENABLE_END_TO_END_WEB_TESTS "Enable end-to-end web testing with Playwright" FALSE)
 OPTION(ENABLE_FOXX_TESTS "Enable Foxx testing, off by default because it
   will overwrite the test database." FALSE)
+OPTION(ENABLE_RUST_TESTS "Enable Rust component testing" FALSE)
 
 set(INSTALL_REPO_SERVER ${BUILD_REPO_SERVER})
 set(INSTALL_AUTHZ ${BUILD_AUTHZ})
@@ -180,6 +182,12 @@ if( BUILD_FOXX OR BUILD_CORE_SERVER )
   add_subdirectory( core )
 endif()
 
+# Include Rust configuration if BUILD_RUST is enabled
+if( BUILD_RUST )
+  include(./cmake/Rust.cmake)
+  add_subdirectory(repository/repo-server-rs)
+endif()
+
 if( BUILD_REPO_SERVER OR BUILD_AUTHZ)
   add_subdirectory( repository )
 endif()
@@ -219,15 +227,16 @@ if( INSTALL_WEB_SERVER )
   install( FILES ${PROJECT_SOURCE_DIR}/web/version.js DESTINATION ${DATAFED_INSTALL_PATH}/web )
 endif()
 
-if( INSTALL_FOXX ) 
-  install(CODE "execute_process(COMMAND ${DataFed_SOURCE_DIR}/scripts/install_foxx.sh
-                                OUTPUT_VARIABLE _out
-                                ERROR_VARIABLE _err
-                                RESULT_VARIABLE _res)
-                If (NOT \${_res} EQUAL \"0\")
-                    message( FATAL_ERROR \"out: \${_out} install_foxx failed: \${_err}\")
-                endif()"
-         )
+if( BUILD_RUST ) 
+  # Install the Rust binary
+  if(DEFINED repo-server-rs_BINARY)
+    install(FILES ${repo-server-rs_BINARY}
+        DESTINATION ${DATAFED_INSTALL_PATH}/bin
+        PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                   GROUP_READ GROUP_EXECUTE
+                   WORLD_READ WORLD_EXECUTE
+    )
+  endif()
 endif()
 
 if (ENABLE_END_TO_END_TESTS)
