@@ -11,7 +11,7 @@ fn main() {
         "src/cpp/repo_bridge.cc",
     ])
     .include("/opt/datafed/dependencies")
-    .include("/mnt/storage/datafed_rs/DataFed/build/common/include")
+    .include("/mnt/storage/datafed_rs/DataFed/common/include")
     .include("/mnt/storage/datafed_rs/DataFed/build/common/proto")
     .include("./include")
     .include("/opt/datafed/dependencies/include")

@@ -11,7 +11,7 @@ fn main() {
         "src/cpp/repo_bridge.cc",
     ])
     .include("@DEPENDENCY_INSTALL_PATH@")
-    .include("@CMAKE_BINARY_DIR@/common/include")
+    .include("@CMAKE_SOURCE_DIR@/common/include")
     .include("@CMAKE_BINARY_DIR@/common/proto")
     .include("./include")
     .include("@DEPENDENCY_INSTALL_PATH@/include")
