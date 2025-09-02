@@ -185,7 +185,6 @@ endif()
 # Include Rust configuration if BUILD_RUST is enabled
 if( BUILD_RUST )
   include(./cmake/Rust.cmake)
-  add_subdirectory(repository/repo-server-rs)
 endif()
 
 if( BUILD_REPO_SERVER OR BUILD_AUTHZ)
@@ -225,18 +224,6 @@ if( INSTALL_WEB_SERVER )
   install( DIRECTORY ${PROJECT_SOURCE_DIR}/web/static DESTINATION ${DATAFED_INSTALL_PATH}/web )
   install( DIRECTORY ${PROJECT_SOURCE_DIR}/web/views DESTINATION ${DATAFED_INSTALL_PATH}/web )
   install( FILES ${PROJECT_SOURCE_DIR}/web/version.js DESTINATION ${DATAFED_INSTALL_PATH}/web )
-endif()
-
-if( BUILD_RUST ) 
-  # Install the Rust binary
-  if(DEFINED repo-server-rs_BINARY)
-    install(FILES ${repo-server-rs_BINARY}
-        DESTINATION ${DATAFED_INSTALL_PATH}/bin
-        PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
-                   GROUP_READ GROUP_EXECUTE
-                   WORLD_READ WORLD_EXECUTE
-    )
-  endif()
 endif()
 
 if (ENABLE_END_TO_END_TESTS)

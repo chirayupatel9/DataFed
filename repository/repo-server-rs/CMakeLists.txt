@@ -11,6 +11,9 @@ include(${PROJECT_SOURCE_DIR}/cmake/Rust.cmake)
 # Build the Rust project
 build_rust_project(${RUST_PROJECT_NAME} ${DEPENDENCY_INSTALL_PATH})
 
+# Install the Rust binary
+install_rust_binary(${RUST_PROJECT_NAME})
+
 # Add tests if enabled
 if(BUILD_TESTS)
     add_rust_tests(${RUST_PROJECT_NAME} ${DEPENDENCY_INSTALL_PATH})

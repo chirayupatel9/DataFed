@@ -15,7 +15,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             core_server: "tcp://localhost:9998".to_string(),
-            cred_dir: "/mnt/storage/rust/DataFed/".to_string(),
+            cred_dir: "/mnt/storage/datafed_rs/DataFed/".to_string(),
             port: 10000,
             timeout: 5000,
             num_req_worker_threads: 4,

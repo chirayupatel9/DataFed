@@ -9,3 +9,7 @@ endif()
 if( BUILD_AUTHZ )
   add_subdirectory( gridftp )
 endif()
+
+if( BUILD_RUST )
+  add_subdirectory( repo-server-rs ${CMAKE_BINARY_DIR}/rust-build )
+endif()
