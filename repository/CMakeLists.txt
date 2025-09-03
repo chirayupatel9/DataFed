@@ -4,6 +4,9 @@ include_directories(${CMAKE_BINARY_DIR}/common)
 
 if( BUILD_REPO_SERVER )
   add_subdirectory( server )
+  if( BUILD_RUST )
+    add_subdirectory( repo-server-rs )
+  endif()
 endif()
 
 if( BUILD_AUTHZ )

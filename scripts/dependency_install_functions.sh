@@ -679,10 +679,10 @@ install_boost() {
     cd "boost_${DATAFED_BOOST//./_}"
     
     # Bootstrap and build Boost
-    ./bootstrap.sh --prefix="${DATAFED_DEPENDENCIES_INSTALL_PATH}" --with-libraries=date_time,filesystem,program_options,system,thread,unit_test_framework
+    ./bootstrap.sh --prefix="${DATAFED_DEPENDENCIES_INSTALL_PATH}" --with-libraries=date_time,filesystem,program_options,system,thread,test
     
     # Build with static libraries
-    ./b2 -j 8 --prefix="${DATAFED_DEPENDENCIES_INSTALL_PATH}" --build-type=minimal link=static threading=multi runtime-link=static install
+    ./b2 -j 8 --prefix="${DATAFED_DEPENDENCIES_INSTALL_PATH}" --build-type=minimal link=static threading=multi install
 
     # Mark boost as installed
     touch "${DATAFED_DEPENDENCIES_INSTALL_PATH}/${BOOST_FLAG_PREFIX}${DATAFED_BOOST}"

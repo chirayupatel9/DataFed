@@ -36,7 +36,18 @@ COPY ./scripts/generate_repo_config.sh         ${BUILD_DIR}/scripts/
 COPY ./scripts/install_repo.sh                 ${BUILD_DIR}/scripts/
 COPY ./cmake                                   ${BUILD_DIR}/cmake
 COPY ./repository/server                       ${BUILD_DIR}/repository/server
+RUN rm -rf ${BUILD_DIR}/repository/repo-server-rs
 COPY ./repository/repo-server-rs               ${BUILD_DIR}/repository/repo-server-rs
+
+# Rust is already installed in the dependencies image
+# Verify Rust installation and source code
+RUN echo "=== Verifying Rust installation ===" && \
+    rustc --version && \
+    cargo --version && \
+    echo "=== Checking Rust source code ===" && \
+    ls -la ${BUILD_DIR}/repository/repo-server-rs/ && \
+    echo "=== Rust source files ===" && \
+    find ${BUILD_DIR}/repository/repo-server-rs/ -name "*.rs" -o -name "Cargo.toml" | head -10
 
 RUN ${BUILD_DIR}/scripts/generate_datafed.sh && \
 	${DATAFED_DEPENDENCIES_INSTALL_PATH}/bin/cmake -S. -B build						\
@@ -48,15 +59,41 @@ RUN ${BUILD_DIR}/scripts/generate_datafed.sh && \
 	-DBUILD_PYTHON_CLIENT=False	\
 	-DBUILD_FOXX=False				\
 	-DBUILD_RUST=True
+RUN echo "=== CMake configuration completed ===" && \
+    echo "=== Checking if Rust targets were created ===" && \
+    find build -name "*rust*" -o -name "*repo-server-rs*" 2>/dev/null || echo "No Rust targets found" && \
+    echo "=== Checking CMake targets ===" && \
+    ${DATAFED_DEPENDENCIES_INSTALL_PATH}/bin/cmake --build build --target help | grep -i rust || echo "No Rust targets found in CMake" && \
+    echo "=== CMake build starting ==="
 RUN ${DATAFED_DEPENDENCIES_INSTALL_PATH}/bin/cmake --build build -j 8
+RUN echo "=== CMake build completed ===" && \
+    echo "=== Checking build results ===" && \
+    find build -name "*repo-server-rs*" -type f 2>/dev/null || echo "No repo-server-rs binaries found in build" && \
+    echo "=== CMake install starting ==="
 RUN ${DATAFED_DEPENDENCIES_INSTALL_PATH}/bin/cmake --build build --target install
 
-# Copy Boost libraries to /libraries directory for runtime stage
-RUN mkdir -p /libraries
-RUN cp /usr/lib/x86_64-linux-gnu/libboost_program_options.so.* /libraries/
-RUN cp /usr/lib/x86_64-linux-gnu/libboost_filesystem.so.* /libraries/
-RUN ln -sf /libraries/libboost_program_options.so.1.74.0 /libraries/libboost_program_options.so
-RUN ln -sf /libraries/libboost_filesystem.so.1.74.0 /libraries/libboost_filesystem.so
+# Debug: Check what files were actually created
+RUN echo "=== Checking build output ===" && \
+    find ${DATAFED_INSTALL_PATH} -name "*repo-server-rs*" -type f 2>/dev/null || echo "No repo-server-rs files found in ${DATAFED_INSTALL_PATH}" && \
+    find build -name "*repo-server-rs*" -type f 2>/dev/null || echo "No repo-server-rs files found in build directory" && \
+    find . -name "*repo-server-rs*" -type f 2>/dev/null || echo "No repo-server-rs files found in current directory"
+
+# Create a simple script to copy Rust binaries if they exist
+RUN echo '#!/bin/bash' > /tmp/copy_rust.sh && \
+    echo 'set -e' >> /tmp/copy_rust.sh && \
+    echo 'if [ -f /opt/datafed/repo/repo-server-rs ]; then' >> /tmp/copy_rust.sh && \
+    echo '    echo "Copying repo-server-rs from repo directory"' >> /tmp/copy_rust.sh && \
+    echo '    cp /opt/datafed/repo/repo-server-rs /tmp/repo-server-rs-repo' >> /tmp/copy_rust.sh && \
+    echo 'fi' >> /tmp/copy_rust.sh && \
+    echo 'if [ -f /opt/datafed/bin/repo-server-rs ]; then' >> /tmp/copy_rust.sh && \
+    echo '    echo "Copying repo-server-rs from bin directory"' >> /tmp/copy_rust.sh && \
+    echo '    cp /opt/datafed/bin/repo-server-rs /tmp/repo-server-rs-bin' >> /tmp/copy_rust.sh && \
+    echo 'fi' >> /tmp/copy_rust.sh && \
+    chmod +x /tmp/copy_rust.sh && \
+    /tmp/copy_rust.sh
+
+# Note: Boost libraries are built as static libraries and linked into the executables
+# No need to copy shared libraries since we're using static linking
 
 FROM ${RUNTIME} AS repo
 
@@ -76,15 +113,13 @@ ENV           DATAFED_REPO_ID_AND_DIR="home"
 ENV                       DATAFED_DIR="$DATAFED_DIR"
 ENV                         BUILD_DIR="$BUILD_DIR"
 ENV                           LIB_DIR="$LIB_DIR"
+ENV                    DATAFED_DOMAIN="datafed.ornl.gov"
+ENV           DATAFED_DEFAULT_LOG_PATH="/var/log/datafed"
 
 WORKDIR /datafed
 
-COPY --from=repo-build /libraries/libboost_program_options.so /libraries/libboost_program_options.so
-COPY --from=repo-build /libraries/libboost_filesystem.so      /libraries/libboost_filesystem.so
-# Copy Boost libraries to system library location and create symlinks
-RUN cp /libraries/libboost_program_options.so /usr/local/lib/
-RUN cp /libraries/libboost_filesystem.so /usr/local/lib/
-RUN ldconfig
+# Note: Boost libraries are statically linked into the executables
+# No need to copy shared libraries to runtime stage
 
 USER datafed
 
@@ -96,9 +131,6 @@ COPY --chown=datafed:root ./repository/docker/entrypoint_repo.sh ${BUILD_DIR}/re
 COPY --chown=datafed:root ./repository/repo-server-rs/repo-server.toml ${DATAFED_INSTALL_PATH}/repo/repo-server.toml
 COPY --from=repo-build --chown=datafed:root ${DATAFED_INSTALL_PATH}/repo/datafed-repo ${DATAFED_INSTALL_PATH}/repo/datafed-repo
 COPY --from=repo-build --chown=datafed:root ${DATAFED_INSTALL_PATH}/repo/repo-server-rs ${DATAFED_INSTALL_PATH}/repo/repo-server-rs
-COPY --from=repo-build --chown=datafed:root ${DATAFED_INSTALL_PATH}/bin/repo-server-rs ${DATAFED_INSTALL_PATH}/bin/repo-server-rs
-RUN chmod +x ${DATAFED_INSTALL_PATH}/repo/repo-server-rs
-RUN chmod +x ${DATAFED_INSTALL_PATH}/bin/repo-server-rs
 
 USER root
 

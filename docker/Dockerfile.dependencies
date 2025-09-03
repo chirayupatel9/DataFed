@@ -57,6 +57,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN rustup default nightly
 RUN rustup target add x86_64-unknown-linux-gnu
+RUN rustup target add x86_64-unknown-linux-musl
 
 # Core dependencies
 COPY ./scripts/install_core_dependencies.sh ${BUILD_DIR}/scripts/
