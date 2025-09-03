@@ -22,6 +22,7 @@ OPTION(BUILD_CORE_SERVER "Build DataFed Core Server" TRUE)
 OPTION(BUILD_COMMON "Build DataFed common library" TRUE)
 OPTION(BUILD_DOCS "Build documentation" TRUE)
 OPTION(BUILD_FOXX "Build Foxx" TRUE)
+OPTION(BUILD_RUST "Build Rust components (requires Rust and Cargo)" FALSE)
 OPTION(BUILD_REPO_SERVER "Build DataFed Repo Server" FALSE)
 OPTION(BUILD_PYTHON_CLIENT "Build python client" TRUE)
 OPTION(BUILD_TESTS "Build Tests" TRUE)
@@ -39,6 +40,7 @@ OPTION(ENABLE_END_TO_END_API_TESTS "Enable end-to-end API testing" FALSE)
 OPTION(ENABLE_END_TO_END_WEB_TESTS "Enable end-to-end web testing with Playwright" FALSE)
 OPTION(ENABLE_FOXX_TESTS "Enable Foxx testing, off by default because it
   will overwrite the test database." FALSE)
+OPTION(ENABLE_RUST_TESTS "Enable Rust component testing" FALSE)
 
 set(INSTALL_REPO_SERVER ${BUILD_REPO_SERVER})
 set(INSTALL_AUTHZ ${BUILD_AUTHZ})
@@ -180,6 +182,11 @@ if( BUILD_FOXX OR BUILD_CORE_SERVER )
   add_subdirectory( core )
 endif()
 
+# Include Rust configuration if BUILD_RUST is enabled
+if( BUILD_RUST )
+  include(./cmake/Rust.cmake)
+endif()
+
 if( BUILD_REPO_SERVER OR BUILD_AUTHZ)
   add_subdirectory( repository )
 endif()
@@ -302,4 +309,3 @@ message("                     zlib Library: ${DATAFED_ZLIB_LIBRARIES}")
 message("                   gssapi Library: ${DATAFED_GSSAPI_LIBRARIES}")
 message("            globus_common Library: ${DATAFED_GLOBUS_COMMON_LIBRARIES}")
 message("")
-

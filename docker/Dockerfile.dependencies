@@ -37,9 +37,11 @@ COPY ./scripts/utils.sh ${BUILD_DIR}/scripts/utils.sh
 COPY ./scripts/install_docs_dependencies.sh ${BUILD_DIR}/scripts/
 COPY ./cmake/Web.cmake ${BUILD_DIR}/cmake/Web.cmake
 COPY ./cmake/Version.cmake ${BUILD_DIR}/cmake/Version.cmake
+COPY ./cmake/Rust.cmake ${BUILD_DIR}/cmake/Rust.cmake
 COPY ./web/package.json.in ${BUILD_DIR}/web/package.json.in
 COPY ./web/version.js.in ${BUILD_DIR}/web/version.js.in
 COPY ./scripts/generate_datafed.sh ${BUILD_DIR}/scripts/generate_datafed.sh
+COPY ./repository/CMakeLists.txt ${BUILD_DIR}/repository/repo-server-rs
 
 RUN echo "#!/bin/bash\n\$@" > /usr/bin/sudo && chmod +x /usr/bin/sudo
 
@@ -49,6 +51,12 @@ RUN ${BUILD_DIR}/scripts/generate_datafed.sh
 # Web dependencies
 COPY ./scripts/install_ws_dependencies.sh ${BUILD_DIR}/scripts/
 RUN DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC ${BUILD_DIR}/scripts/install_dependencies.sh -a -r -z -c
+
+# Install Rust nightly (required for edition 2024)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain nightly
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN rustup default nightly
+RUN rustup target add x86_64-unknown-linux-gnu
 
 # Core dependencies
 COPY ./scripts/install_core_dependencies.sh ${BUILD_DIR}/scripts/
@@ -60,7 +68,7 @@ RUN DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC ${BUILD_DIR}/scripts/install_depen
 
 # Authz dependencies
 COPY ./scripts/install_authz_dependencies.sh ${BUILD_DIR}/scripts/
-RUN DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC ${BUILD_DIR}/scripts/install_dependencies.sh -a -w -c -r
+RUN DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC ${BUILD_DIR}/scripts/install_dependencies.sh -a -w -c -r 
 
 RUN mkdir -p ${DATAFED_INSTALL_PATH}
 RUN mkdir -p ${DATAFED_INSTALL_PATH}/keys

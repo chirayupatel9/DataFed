@@ -36,6 +36,7 @@ COPY ./scripts/generate_repo_config.sh         ${BUILD_DIR}/scripts/
 COPY ./scripts/install_repo.sh                 ${BUILD_DIR}/scripts/
 COPY ./cmake                                   ${BUILD_DIR}/cmake
 COPY ./repository/server                       ${BUILD_DIR}/repository/server
+COPY ./repository/repo-server-rs               ${BUILD_DIR}/repository/repo-server-rs
 
 RUN ${BUILD_DIR}/scripts/generate_datafed.sh && \
 	${DATAFED_DEPENDENCIES_INSTALL_PATH}/bin/cmake -S. -B build						\
@@ -45,9 +46,17 @@ RUN ${BUILD_DIR}/scripts/generate_datafed.sh && \
 	-DBUILD_WEB_SERVER=False		\
 	-DBUILD_DOCS=False					\
 	-DBUILD_PYTHON_CLIENT=False	\
-	-DBUILD_FOXX=False
+	-DBUILD_FOXX=False				\
+	-DBUILD_RUST=True
 RUN ${DATAFED_DEPENDENCIES_INSTALL_PATH}/bin/cmake --build build -j 8
 RUN ${DATAFED_DEPENDENCIES_INSTALL_PATH}/bin/cmake --build build --target install
+
+# Copy Boost libraries to /libraries directory for runtime stage
+RUN mkdir -p /libraries
+RUN cp /usr/lib/x86_64-linux-gnu/libboost_program_options.so.* /libraries/
+RUN cp /usr/lib/x86_64-linux-gnu/libboost_filesystem.so.* /libraries/
+RUN ln -sf /libraries/libboost_program_options.so.1.74.0 /libraries/libboost_program_options.so
+RUN ln -sf /libraries/libboost_filesystem.so.1.74.0 /libraries/libboost_filesystem.so
 
 FROM ${RUNTIME} AS repo
 
@@ -70,9 +79,11 @@ ENV                           LIB_DIR="$LIB_DIR"
 
 WORKDIR /datafed
 
-COPY --from=repo-build /usr/lib/x86_64-linux-gnu/libboost_program_options.so /usr/lib/x86_64-linux-gnu/libboost_program_options.so
-COPY --from=repo-build /usr/lib/x86_64-linux-gnu/libboost_filesystem.so      /usr/lib/x86_64-linux-gnu/libboost_filesystem.so
-
+COPY --from=repo-build /libraries/libboost_program_options.so /libraries/libboost_program_options.so
+COPY --from=repo-build /libraries/libboost_filesystem.so      /libraries/libboost_filesystem.so
+# Copy Boost libraries to system library location and create symlinks
+RUN cp /libraries/libboost_program_options.so /usr/local/lib/
+RUN cp /libraries/libboost_filesystem.so /usr/local/lib/
 RUN ldconfig
 
 USER datafed
@@ -82,11 +93,17 @@ COPY --chown=datafed:root ./scripts/generate_repo_config.sh      ${DATAFED_DIR}/
 COPY --chown=datafed:root ./scripts/install_repo.sh              ${DATAFED_DIR}/scripts/install_repo.sh
 COPY --chown=datafed:root ./cmake/Version.cmake                  ${DATAFED_DIR}/cmake/Version.cmake
 COPY --chown=datafed:root ./repository/docker/entrypoint_repo.sh ${BUILD_DIR}/repository/entrypoint.sh
+COPY --chown=datafed:root ./repository/repo-server-rs/repo-server.toml ${DATAFED_INSTALL_PATH}/repo/repo-server.toml
 COPY --from=repo-build --chown=datafed:root ${DATAFED_INSTALL_PATH}/repo/datafed-repo ${DATAFED_INSTALL_PATH}/repo/datafed-repo
+COPY --from=repo-build --chown=datafed:root ${DATAFED_INSTALL_PATH}/repo/repo-server-rs ${DATAFED_INSTALL_PATH}/repo/repo-server-rs
+COPY --from=repo-build --chown=datafed:root ${DATAFED_INSTALL_PATH}/bin/repo-server-rs ${DATAFED_INSTALL_PATH}/bin/repo-server-rs
+RUN chmod +x ${DATAFED_INSTALL_PATH}/repo/repo-server-rs
+RUN chmod +x ${DATAFED_INSTALL_PATH}/bin/repo-server-rs
 
 USER root
 
 RUN chown -R datafed:root /datafed
 RUN chown -R datafed:root /opt
 
-ENTRYPOINT [ "/datafed/source/repository/entrypoint.sh", "/opt/datafed/repo/datafed-repo","--cfg","/opt/datafed/repo/datafed-repo.cfg"]
+
+ENTRYPOINT [ "/datafed/source/repository/entrypoint.sh", "/opt/datafed/repo/repo-server-rs","--cfg","/opt/datafed/repo/repo-server.toml"]

@@ -15,7 +15,7 @@ sudo_command
 # This script will install all of the dependencies needed by DataFed 1.0
 "$SUDO_CMD" apt-get update
 "$SUDO_CMD" dpkg --configure -a
-"$SUDO_CMD" apt-get install -y libtool build-essential g++ gcc make libboost-all-dev \
+"$SUDO_CMD" apt-get install -y libtool build-essential g++ gcc make \
 pkg-config autoconf automake unzip libcurl4-openssl-dev wget \
 rapidjson-dev libkrb5-dev git libssl-dev
 
@@ -31,6 +31,8 @@ source "${DATAFED_PYTHON_ENV}/bin/activate"
 "python${DATAFED_PYTHON_VERSION}" -m pip install --upgrade pip
 "python${DATAFED_PYTHON_VERSION}" -m pip install setuptools
 
+install_boost
+cd ~
 install_protobuf
 cd ~
 

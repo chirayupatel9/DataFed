@@ -1,357 +1,110 @@
-use std::sync::Arc;
-use parking_lot::Mutex;
-use tracing::{info, error, debug, warn};
-use uuid::Uuid;
-
-use crate::zmq_communicator::{
-    ZeroMQCommunicator, SocketOptions, MockCredentials, MessageType, 
-    MessageFactory, CommunicatorFactory,
-    SocketClassType, UriScheme, SocketDirectionalityType, SocketCommunicationType,
-    SocketConnectionLife, SocketConnectionSecurity, ProtocolType
+use crate::config::Config;
+use crate::version::{SharedCoreVersionInfo, fetch_core_server_version, create_shared_version_info};
+use crate::worker::{self, ZMQInprocMessenger};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
 };
-use crate::request_worker::RequestWorker;
-use crate::proto::version;
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
-use prost::Message;
-
-/// Repository server configuration (legacy struct for backward compatibility)
-#[derive(Debug, Clone)]
-pub struct ServerConfig {
-    pub port: u16,
-    pub num_worker_threads: u32,
-    pub core_server: String,
-    pub globus_collection_path: String,
-    pub cred_dir: String,
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            port: 10000, // Use port 10001 to avoid conflicts with mock core server (9998, 10000)
-            num_worker_threads: 4,
-            core_server: "tcp://localhost:9998".to_string(),
-            globus_collection_path: "/mnt/datafed-repo".to_string(),
-            cred_dir: "/mnt/storage/rust/Datafed/".to_string(),
-        }
-    }
-}
-
-impl From<crate::config::ServerConfig> for ServerConfig {
-    fn from(config: crate::config::ServerConfig) -> Self {
-        Self {
-            port: config.port,
-            num_worker_threads: config.num_worker_threads,
-            core_server: config.core_server,
-            globus_collection_path: config.globus_collection_path,
-            cred_dir: config.cred_dir,
-        }
-    }
-}
-
-/// Repository server implementation using ZeroMQ proxy pattern
 pub struct RepoServer {
-    config: ServerConfig,
-    workers: Vec<RequestWorker>,
-    proxy_server: Option<ZeroMQCommunicator>,
-    proxy_client: Option<ZeroMQCommunicator>,
-    running: Arc<Mutex<bool>>,
+    cfg: Config,
+    running: Arc<AtomicBool>,
+    workers: Vec<JoinHandle<()>>,
+    version_info: SharedCoreVersionInfo,
 }
 
 impl RepoServer {
-    pub fn new(config: ServerConfig) -> Self {
+    pub fn new(cfg: Config) -> Self {
         Self {
-            config,
+            cfg,
+            running: Arc::new(AtomicBool::new(false)),
             workers: Vec::new(),
-            proxy_server: None,
-            proxy_client: None,
-            running: Arc::new(Mutex::new(true)),
+            version_info: create_shared_version_info(),
         }
     }
-    
-    pub async fn start(&mut self) -> Result<(), String> {
-        info!("Starting DataFed repository server on port {}", self.config.port);
-        
-        // Load mock credentials (matching the C++ implementation)
-        let credentials = MockCredentials::new(
-            "4X1hKiU5pdwdk.s7&=Q2(b1]p!^Nj=Dnk2&7vh@f".to_string(),
-            "G1DpacgVoCcRmLYQ6PA8:Q$]/w5SE*Qm?)}L!@Gv".to_string(),
-        );
-        
-        // Create worker threads
-        info!("Creating {} worker threads", self.config.num_worker_threads);
-        for worker_id in 1..=self.config.num_worker_threads {
-            let mut worker = RequestWorker::new(worker_id);
-            worker.start().await.map_err(|e| format!("Failed to start worker {}: {}", worker_id, e))?;
-            self.workers.push(worker);
+
+    pub fn run(&mut self) {
+        // A) Core version handshake (retry until success)
+        while let Err(e) = self.core_handshake() {
+            eprintln!("core handshake failed: {e}; retrying…");
+            thread::sleep(Duration::from_secs(2));
         }
+
+        // B) Start the secure TCP ↔ inproc proxy via C++ bridge
+        // This mimics the C++ ioSecure() method exactly
+        println!("Starting ZMQ proxy (TCP ↔ INPROC)...");
+        // Start the C++ proxy via FFI bridge
+        // The C++ version creates:
+        // - TCP server socket (external, secure) on port 10000
+        // - INPROC client socket (internal) connecting to "workers" endpoint
+        // - ProxyBasicZMQ or ProxyCustom to bridge them
         
-        // Create ZeroMQ proxy (matching the C++ implementation)
-        self.setup_proxy(credentials).await?;
+        // Load repo server keys for authentication (like C++ RepoServer::loadKeys)
+        let repo_public_key = self.cfg.load_repo_public_key()
+            .unwrap_or_else(|e| panic!("Failed to load repo public key: {}", e));
+        let repo_private_key = self.cfg.load_repo_private_key()
+            .unwrap_or_else(|e| panic!("Failed to load repo private key: {}", e));
         
-        info!("Repository server started successfully");
-        Ok(())
-    }
-    
-    async fn setup_proxy(&mut self, credentials: MockCredentials) -> Result<(), String> {
-        info!("Setting up ZeroMQ proxy");
+        crate::ffi::repo::server_start(&self.cfg.core_server, &repo_public_key, &repo_private_key)
+            .unwrap_or_else(|e| panic!("Failed to start ZMQ proxy: {}", e));
+        println!("ZMQ proxy started successfully");
         
-        // Create proxy server socket (external facing)
-        let server_socket_options = SocketOptions {
-            scheme: UriScheme::Tcp,
-            class_type: SocketClassType::Server,
-            direction_type: SocketDirectionalityType::Bidirectional,
-            communication_type: SocketCommunicationType::Asynchronous,
-            connection_life: SocketConnectionLife::Persistent,
-            connection_security: SocketConnectionSecurity::Secure,
-            protocol_type: ProtocolType::Zqtp,
-            host: "*".to_string(),
-            port: Some(self.config.port),
-            local_id: Some("main_repository_server_external_facing_socket".to_string()),
-        };
+        // C) Spawn workers (using real ZMQ INPROC messenger)
+        let base = std::path::PathBuf::from(self.cfg.globus_collection_path.clone().unwrap_or("/data".into()));
+        let version_info = self.version_info.clone();
         
-        let factory = CommunicatorFactory::new();
-        let proxy_server = factory.create(
-            server_socket_options,
-            credentials.clone(),
-            10000, // 10 second timeout
-            10,    // 10ms poll timeout
-        ).map_err(|e| format!("Failed to create proxy server: {}", e))?;
+        // Set running flag to true BEFORE spawning workers
+        self.running.store(true, Ordering::SeqCst);
+        println!("Running flag set to true, spawning workers...");
         
-        // Create proxy client socket (internal facing)
-        let client_socket_options = SocketOptions {
-            scheme: UriScheme::Inproc,
-            class_type: SocketClassType::Client,
-            direction_type: SocketDirectionalityType::Bidirectional,
-            communication_type: SocketCommunicationType::Asynchronous,
-            connection_life: SocketConnectionLife::Persistent,
-            connection_security: SocketConnectionSecurity::Insecure,
-            protocol_type: ProtocolType::Zqtp,
-            host: "workers".to_string(),
-            port: None,
-            local_id: Some("main_repository_server_internal_facing_socket".to_string()),
-        };
-        
-        let proxy_client = factory.create(
-            client_socket_options,
-            credentials,
-            10000, // 10 second timeout
-            10,    // 10ms poll timeout
-        ).map_err(|e| format!("Failed to create proxy client: {}", e))?;
-        
-        self.proxy_server = Some(proxy_server);
-        self.proxy_client = Some(proxy_client);
-        
-        info!("ZeroMQ proxy setup complete");
-        Ok(())
-    }
-    
-    pub async fn run(&mut self) -> Result<(), String> {
-        info!("Repository server running");
-        
-        // Start worker tasks
-        let mut worker_handles = Vec::new();
-        for worker in &mut self.workers {
-            let worker_id = worker.worker_id;
-            let _running = self.running.clone();
-            
-            let handle = tokio::spawn(async move {
-                // Create a new worker for this task
-                let mut task_worker = RequestWorker::new(worker_id);
-                if let Err(e) = task_worker.start().await {
-                    error!("Failed to start worker {}: {}", worker_id, e);
-                    return;
-                }
-                
-                if let Err(e) = task_worker.run().await {
-                    error!("Worker {} failed: {}", worker_id, e);
-                }
-            });
-            worker_handles.push(handle);
+        for i in 0..self.cfg.num_req_worker_threads {
+            let mess = ZMQInprocMessenger::new(i); // Real INPROC messenger
+            println!("Spawning worker {}", i);
+            let h = worker::spawn_worker(
+                i,
+                mess,
+                base.clone(),
+                self.running.clone(),
+                version_info.clone(),
+            );
+            self.workers.push(h);
+            println!("Worker {} spawned successfully", i);
         }
-        
-        // Run proxy loop
-        let proxy_server = self.proxy_server.as_ref()
-            .ok_or("Proxy server not initialized")?;
-        let proxy_client = self.proxy_client.as_ref()
-            .ok_or("Proxy client not initialized")?;
-        
-        while *self.running.lock() {
-            // Receive from external clients
-            let response = proxy_server.receive(MessageType::GoogleProtocolBuffer);
-            
-            if response.error {
-                error!("Proxy server received error: {}", response.error_msg);
-                continue;
-            }
-            
-            if response.time_out {
-                debug!("Proxy server received timeout");
-                continue;
-            }
-            
-            if let Some(message) = response.message {
-                debug!("Proxy server received message: correlation_id={}, type={}, proto_id={}", 
-                       message.correlation_id, message.message_type, message.proto_id);
-                
-                // Forward to internal workers
-                if let Err(e) = proxy_client.send(&message) {
-                    error!("Failed to forward message to workers: {}", e);
-                } else {
-                    debug!("Forwarded message to workers: correlation_id={}", message.correlation_id);
-                }
-                
-                // Receive response from workers
-                let worker_response = proxy_client.receive(MessageType::GoogleProtocolBuffer);
-                
-                if worker_response.error {
-                    error!("Proxy client received error: {}", worker_response.error_msg);
-                    continue;
-                }
-                
-                if worker_response.time_out {
-                    debug!("Proxy client received timeout");
-                    continue;
-                }
-                
-                if let Some(reply) = worker_response.message {
-                    debug!("Proxy client received reply: correlation_id={}, type={}, proto_id={}", 
-                           reply.correlation_id, reply.message_type, reply.proto_id);
-                    
-                    // Forward response back to external client
-                    if let Err(e) = proxy_server.send(&reply) {
-                        error!("Failed to forward reply to client: {}", e);
-                    } else {
-                        debug!("Forwarded reply to client: correlation_id={}", reply.correlation_id);
-                    }
-                }
-            }
+
+        // D) Block until shutdown (proxy blocks here in real code)
+        println!("Server entering main loop, waiting for shutdown signal...");
+        while self.running.load(Ordering::Relaxed) {
+            thread::sleep(Duration::from_millis(100));
         }
-        
-        // Wait for workers to finish
-        for handle in worker_handles {
-            if let Err(e) = handle.await {
-                error!("Worker task failed: {}", e);
-            }
-        }
-        
-        info!("Repository server stopped");
-        Ok(())
-    }
-    
-    pub async fn stop(&self) {
-        info!("Stopping repository server");
-        *self.running.lock() = false;
-        
-        // Stop all workers
-        for worker in &self.workers {
-            worker.stop().await;
+        println!("Server received shutdown signal, stopping workers...");
+
+        // E) Stop proxy here (and any other IO threads)
+        println!("Stopping ZMQ proxy...");
+        // Stop the C++ proxy via FFI bridge
+        if let Err(e) = crate::ffi::repo::server_stop() {
+            eprintln!("Warning: Failed to stop ZMQ proxy: {}", e);
         }
     }
-    
-    pub async fn check_server_version(&self, server_address: &str) -> Result<bool, String> {
-        info!("Checking core server version at {}", server_address);
-        
-        // Parse server address to extract host and port
-        let (host, port) = if server_address.starts_with("tcp://") {
-            let parts: Vec<&str> = server_address[6..].split(':').collect();
-            if parts.len() == 2 {
-                (parts[0].to_string(), parts[1].parse::<u16>().unwrap_or(9998))
-            } else {
-                (parts[0].to_string(), 9998)
-            }
-        } else {
-            (server_address.to_string(), 9998)
-        };
-        
-        // The mock core server has both secure (port) and insecure (port + 1) interfaces
-        // We'll use the secure interface (port 9998) since that's the main interface
-        let secure_port = port;
-        
-        // Create client socket options
-        let socket_options = SocketOptions {
-            scheme: UriScheme::Tcp,
-            class_type: SocketClassType::Client,
-            direction_type: SocketDirectionalityType::Bidirectional,
-            communication_type: SocketCommunicationType::Asynchronous,
-            connection_life: SocketConnectionLife::Persistent,
-            connection_security: SocketConnectionSecurity::Insecure,
-            protocol_type: ProtocolType::Zqtp,
-            host,
-            port: Some(secure_port), // Use secure port (9998) but insecure connection
-            local_id: Some(format!("version-check-client-{}", Uuid::new_v4())),
-        };
-        
-        // Create mock credentials for connecting to the core server
-        // We need the server's public key and our own key pair
-        let credentials = MockCredentials::new(
-            "4X1hKiU5pdwdk.s7&=Q2(b1]p!^Nj=Dnk2&7vh@f".to_string(), // Our public key
-            "G1DpacgVoCcRmLYQ6PA8:Q$]/w5SE*Qm?)}L!@Gv".to_string(), // Our private key
-        );
-        
-        // Create communicator
-        let factory = CommunicatorFactory::new();
-        debug!("Creating version check communicator with options: {:?}", socket_options);
-        let communicator = match factory.create(
-            socket_options,
-            credentials,
-            5000, // 5 second timeout
-            10,   // 10ms poll timeout
-        ) {
-            Ok(comm) => comm,
-            Err(e) => {
-                warn!("Failed to create version check communicator: {}", e);
-                return Ok(false); // Return false instead of error to allow server to start
-            }
-        };
-        
-        // Create version request
-        let message_factory = MessageFactory::new();
-        let version_request = message_factory.create_version_request();
-        
-        // Send version request
-        if let Err(e) = communicator.send(&version_request) {
-            warn!("Failed to send version request: {}", e);
-            return Ok(false); // Return false instead of error to allow server to start
+
+    pub fn stop(&self) {
+        self.running.store(false, Ordering::SeqCst);
+    }
+
+    pub fn join(self) {
+        for h in self.workers {
+            let _ = h.join();
         }
-        
-        // Receive response
-        let response = communicator.receive(MessageType::GoogleProtocolBuffer);
-        
-        if response.error {
-            warn!("Version check failed: {}", response.error_msg);
-            return Ok(false);
-        }
-        
-        if response.time_out {
-            warn!("Version check timed out");
-            return Ok(false);
-        }
-        
-        if let Some(message) = response.message {
-            // Parse version reply
-            let version_reply = match version::VersionReply::decode(message.payload.as_slice()) {
-                Ok(reply) => reply,
-                Err(e) => {
-                    warn!("Failed to decode version reply: {}", e);
-                    return Ok(false);
-                }
-            };
-            
-            info!("Core server version: {}.{}.{}", 
-                  version_reply.api_major, version_reply.api_minor, version_reply.api_patch);
-            
-            // Check compatibility (matching the C++ implementation)
-            if version_reply.api_major != 1 {
-                warn!("Incompatible messaging API detected: major version {} not supported", 
-                      version_reply.api_major);
-                return Ok(false);
-            }
-            
-            info!("Core server connection OK");
-            Ok(true)
-        } else {
-            warn!("No version response received");
-            Ok(false)
+    }
+
+    pub fn cfg(&self) -> &Config { &self.cfg }
+
+    fn core_handshake(&self) -> Result<(), String> {
+        // Use the new version management system to connect to core server
+        match fetch_core_server_version(&self.cfg.core_server, self.version_info.clone(), &self.cfg) {
+            Ok(()) => Ok(()),
+            Err(e) => Err(format!("Failed to connect to core server: {}", e)),
         }
     }
 }

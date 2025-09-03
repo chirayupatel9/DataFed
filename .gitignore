@@ -26,6 +26,8 @@ docs/.doctrees/
 docs/.nojekyll
 external/cppzmq/
 external/globus-connect-server-deploy
+external/*
+repository/repo-server-rs/target/
 external/json-schema-validator/
 external/json/
 external/libcurl/

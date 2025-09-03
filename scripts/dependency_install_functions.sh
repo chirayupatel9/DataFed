@@ -661,6 +661,35 @@ install_libcurl() {
   fi
 }
 
+install_boost() {
+  local BOOST_FLAG_PREFIX=".boost_installed-"
+  clean_install_flags "$BOOST_FLAG_PREFIX"
+  if [ ! -e "${DATAFED_DEPENDENCIES_INSTALL_PATH}/${BOOST_FLAG_PREFIX}${DATAFED_BOOST}" ]; then
+    local original_dir=$(pwd)
+    if [ -d "${PROJECT_ROOT}/external/boost" ]
+    then
+      "$SUDO_CMD" rm -rf "${PROJECT_ROOT}/external/boost"
+    fi
+    mkdir -p "${PROJECT_ROOT}/external/boost"
+    cd "${PROJECT_ROOT}/external/boost"
+    
+    # Download Boost source
+    wget "https://archives.boost.io/release/${DATAFED_BOOST}/source/boost_${DATAFED_BOOST//./_}.tar.bz2"
+    tar -xjf "boost_${DATAFED_BOOST//./_}.tar.bz2"
+    cd "boost_${DATAFED_BOOST//./_}"
+    
+    # Bootstrap and build Boost
+    ./bootstrap.sh --prefix="${DATAFED_DEPENDENCIES_INSTALL_PATH}" --with-libraries=date_time,filesystem,program_options,system,thread,unit_test_framework
+    
+    # Build with static libraries
+    ./b2 -j 8 --prefix="${DATAFED_DEPENDENCIES_INSTALL_PATH}" --build-type=minimal link=static threading=multi runtime-link=static install
+
+    # Mark boost as installed
+    touch "${DATAFED_DEPENDENCIES_INSTALL_PATH}/${BOOST_FLAG_PREFIX}${DATAFED_BOOST}"
+    cd "$original_dir"
+  fi
+}
+
 install_zlib() {
   local ZLIB_FLAG_PREFIX=".zlib_installed-"
   clean_install_flags "$ZLIB_FLAG_PREFIX"
@@ -708,6 +737,9 @@ install_dep_by_name() {
       ;;
     "gcs")
       install_gcs
+      ;;
+    "boost")
+      install_boost
       ;;
     "libsodium")
       install_libsodium
