@@ -35,7 +35,7 @@ COPY ./scripts/generate_datafed.sh             ${BUILD_DIR}/scripts/
 COPY ./scripts/generate_repo_config.sh         ${BUILD_DIR}/scripts/
 COPY ./scripts/install_repo.sh                 ${BUILD_DIR}/scripts/
 COPY ./cmake                                   ${BUILD_DIR}/cmake
-COPY ./repository/server                       ${BUILD_DIR}/repository/server
+# COPY ./repository/server                       ${BUILD_DIR}/repository/server
 RUN rm -rf ${BUILD_DIR}/repository/repo-server-rs
 COPY ./repository/repo-server-rs               ${BUILD_DIR}/repository/repo-server-rs
 
@@ -58,7 +58,8 @@ RUN ${BUILD_DIR}/scripts/generate_datafed.sh && \
 	-DBUILD_DOCS=False					\
 	-DBUILD_PYTHON_CLIENT=False	\
 	-DBUILD_FOXX=False				\
-	-DBUILD_RUST=True
+	-DBUILD_RUST=True				\
+	-DINSTALL_REPO_SERVER=True				
 RUN echo "=== CMake configuration completed ===" && \
     echo "=== Checking if Rust targets were created ===" && \
     find build -name "*rust*" -o -name "*repo-server-rs*" 2>/dev/null || echo "No Rust targets found" && \
@@ -129,7 +130,7 @@ COPY --chown=datafed:root ./scripts/install_repo.sh              ${DATAFED_DIR}/
 COPY --chown=datafed:root ./cmake/Version.cmake                  ${DATAFED_DIR}/cmake/Version.cmake
 COPY --chown=datafed:root ./repository/docker/entrypoint_repo.sh ${BUILD_DIR}/repository/entrypoint.sh
 COPY --chown=datafed:root ./repository/repo-server-rs/repo-server.toml ${DATAFED_INSTALL_PATH}/repo/repo-server.toml
-COPY --from=repo-build --chown=datafed:root ${DATAFED_INSTALL_PATH}/repo/datafed-repo ${DATAFED_INSTALL_PATH}/repo/datafed-repo
+# COPY --from=repo-build --chown=datafed:root ${DATAFED_INSTALL_PATH}/repo/datafed-repo ${DATAFED_INSTALL_PATH}/repo/datafed-repo
 COPY --from=repo-build --chown=datafed:root ${DATAFED_INSTALL_PATH}/repo/repo-server-rs ${DATAFED_INSTALL_PATH}/repo/repo-server-rs
 
 USER root
