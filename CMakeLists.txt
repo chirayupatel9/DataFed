@@ -204,11 +204,11 @@ if( BUILD_DOCS )
   add_subdirectory( doc_source EXCLUDE_FROM_ALL )
 endif()
 
-if( INSTALL_REPO_SERVER )
-  # Should only need to do this on the same machine that Globus is installed
-  install( TARGETS datafed-repo DESTINATION ${DATAFED_INSTALL_PATH}/repo )
-  install( CODE "execute_process(COMMAND ${PROJECT_SOURCE_DIR}/scripts/install_repo_service.sh )")
-endif()
+# if( INSTALL_REPO_SERVER )
+#   # Should only need to do this on the same machine that Globus is installed
+#   install( TARGETS datafed-repo DESTINATION ${DATAFED_INSTALL_PATH}/repo )
+#   install( CODE "execute_process(COMMAND ${PROJECT_SOURCE_DIR}/scripts/install_repo_service.sh )")
+# endif()
 
 if( INSTALL_AUTHZ )
   install( TARGETS datafed-authz DESTINATION ${DATAFED_INSTALL_PATH}/authz )

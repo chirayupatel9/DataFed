@@ -64,7 +64,7 @@ function(build_rust_project PROJECT_NAME DEPENDENCY_PATH)
         @ONLY
     )
     
-    # Create a custom target for building the Rust project
+    # Create a custom target for building the Rust project with static linking
     add_custom_target(${UNIQUE_TARGET_NAME} ALL
         COMMAND ${CMAKE_COMMAND} -E env
             CARGO_TARGET_DIR=${RUST_TARGET_DIR}
@@ -185,11 +185,17 @@ function(add_rust_run_target PROJECT_NAME CONFIG_FILE DEPENDENCY_PATH)
         return()
     endif()
     
-    # Check both possible binary locations
+    # Check multiple possible binary locations
     if(EXISTS "${RUST_BINARY_DIR_ALT}/${PROJECT_NAME}")
         set(RUST_BINARY "${RUST_BINARY_DIR_ALT}/${PROJECT_NAME}")
-    else()
+    elseif(EXISTS "${RUST_BINARY_DIR}/${PROJECT_NAME}")
         set(RUST_BINARY "${RUST_BINARY_DIR}/${PROJECT_NAME}")
+    elseif(EXISTS "${RUST_PROJECT_DIR}/target/release/${PROJECT_NAME}")
+        set(RUST_BINARY "${RUST_PROJECT_DIR}/target/release/${PROJECT_NAME}")
+    elseif(EXISTS "${RUST_PROJECT_DIR}/target/debug/${PROJECT_NAME}")
+        set(RUST_BINARY "${RUST_PROJECT_DIR}/target/debug/${PROJECT_NAME}")
+    else()
+        message(FATAL_ERROR "Could not find Rust binary ${PROJECT_NAME} for run target")
     endif()
     
     set(CONFIG_PATH "${RUST_PROJECT_DIR}/${CONFIG_FILE}")

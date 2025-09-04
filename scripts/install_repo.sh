@@ -23,6 +23,6 @@ then
     echo "Keys generated using Rust server"
   else
     echo "Rust server failed, using C++ server for key generation"
-    "${DATAFED_INSTALL_PATH}/repo/datafed-repo" --gen-keys --cred-dir "${DATAFED_INSTALL_PATH}/keys"
+    # "${DATAFED_INSTALL_PATH}/repo/datafed-repo" --gen-keys --cred-dir "${DATAFED_INSTALL_PATH}/keys"
   fi
 fi
