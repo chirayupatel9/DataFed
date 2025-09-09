@@ -4,7 +4,7 @@ ARG DATAFED_DEPENDENCIES_INSTALL_PATH="/opt/datafed/dependencies"
 ARG            GCS_IMAGE="code.ornl.gov:4567/dlsw/datafed/gcs-ubuntu-focal"
 ARG            BUILD_DIR="$DATAFED_DIR/source"
 ARG              LIB_DIR="/usr/local/lib"
-ARG           BASE_IMAGE="debian:bookworm-slim"
+ARG           BASE_IMAGE="debian:trixie-slim"
 
 FROM ${BASE_IMAGE} AS base
 
@@ -19,6 +19,10 @@ ENV DATAFED_DIR="${DATAFED_DIR}"
 
 RUN echo $DATAFED_DIR
 
+# Install required packages
+RUN apt update
+RUN apt install -y grep libcurl4 wget adduser
+
 # Create datafed user, prefer more secure login options than password
 # Recommended to mount ssh public key on run
 RUN adduser --disabled-password --gecos "" datafed
@@ -31,6 +35,3 @@ RUN chown -R datafed:root /opt/datafed
 RUN chown -R datafed:root /var/log/datafed
 RUN chown -R datafed:root ${DATAFED_DIR}
 WORKDIR ${DATAFED_DIR}
-
-RUN apt update
-RUN apt install -y grep libcurl4 wget

@@ -187,7 +187,7 @@ if( BUILD_RUST )
   include(./cmake/Rust.cmake)
 endif()
 
-if( BUILD_REPO_SERVER OR BUILD_AUTHZ)
+if( BUILD_REPO_SERVER OR BUILD_AUTHZ OR BUILD_RUST)
   add_subdirectory( repository )
 endif()
 

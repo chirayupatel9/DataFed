@@ -38,6 +38,7 @@ COPY ./cmake                                   ${BUILD_DIR}/cmake
 # COPY ./repository/server                       ${BUILD_DIR}/repository/server
 RUN rm -rf ${BUILD_DIR}/repository/repo-server-rs
 COPY ./repository/repo-server-rs               ${BUILD_DIR}/repository/repo-server-rs
+COPY ./repository/repo-server-rs               ${BUILD_DIR}/repository/temp/repo-server-rs
 
 # Rust is already installed in the dependencies image
 # Verify Rust installation and source code
@@ -131,7 +132,10 @@ COPY --chown=datafed:root ./cmake/Version.cmake                  ${DATAFED_DIR}/
 COPY --chown=datafed:root ./repository/docker/entrypoint_repo.sh ${BUILD_DIR}/repository/entrypoint.sh
 COPY --chown=datafed:root ./repository/repo-server-rs/repo-server.toml ${DATAFED_INSTALL_PATH}/repo/repo-server.toml
 # COPY --from=repo-build --chown=datafed:root ${DATAFED_INSTALL_PATH}/repo/datafed-repo ${DATAFED_INSTALL_PATH}/repo/datafed-repo
-COPY --from=repo-build --chown=datafed:root ${DATAFED_INSTALL_PATH}/repo/repo-server-rs ${DATAFED_INSTALL_PATH}/repo/repo-server-rs
+COPY --from=repo-build --chown=datafed:root ${DATAFED_INSTALL_PATH}/repo/repo-server-rs ${DATAFED_INSTALL_PATH}/repo/repo-server-rs 
+# Copy the entire dependencies directory
+COPY --from=repo-build ${DATAFED_DEPENDENCIES_INSTALL_PATH} ${DATAFED_DEPENDENCIES_INSTALL_PATH}
+COPY --from=repo-build --chown=datafed:root ${BUILD_DIR}/repository/repo-server-rs ${DATAFED_INSTALL_PATH}/repo/temp/repo-server-rs
 
 USER root
 
@@ -139,4 +143,4 @@ RUN chown -R datafed:root /datafed
 RUN chown -R datafed:root /opt
 
 
-ENTRYPOINT [ "/datafed/source/repository/entrypoint.sh", "/opt/datafed/repo/repo-server-rs","--cfg","/opt/datafed/repo/repo-server.toml"]
+ENTRYPOINT [ "/datafed/source/repository/entrypoint.sh", "/opt/datafed/repo/repo-server-rs"]

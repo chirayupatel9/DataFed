@@ -26,17 +26,31 @@ fn main() {
     }
 
     let args: Vec<String> = env::args().collect();
-    // if args.len() < 2 { print_usage(); return; }
-    let cfg_path: String = args
-        .windows(2)
-        .find(|w| w[0] == "--cfg")
-        .map(|w| w[1].clone())
-        .unwrap_or_else(|| "repo-server.toml".to_string());
-
-    let cfg =
-        Config::load("/mnt/storage/datafed_rs/DataFed/repository/repo-server-rs/repo-server.toml")
-            .expect("failed to load config");
-    println!("Config loaded, creating server...");
+    
+    // Handle help and version commands
+    if args.len() > 1 {
+        match args[1].as_str() {
+            "--help" | "-h" => {
+                print_usage();
+                return;
+            }
+            "version" => {
+                println!(
+                    "repo {}.{}.{}\napi  {}.{}",
+                    version::repo_major(), version::repo_minor(), version::repo_patch(),
+                    version::api_major(),  version::api_minor()
+                );
+                return;
+            }
+            _ => {}
+        }
+    }
+    
+    // Use default config from config.rs, ignore TOML file
+    let mut cfg = Config::default();
+    cfg.normalize();
+    println!("Using default config from config.rs");
+    println!("Config: core_server={}, cred_dir={}, port={}", cfg.core_server, cfg.cred_dir, cfg.port);
     let mut srv = RepoServer::new(cfg);
     println!("Server created, starting run method...");
     srv.run(); // blocking

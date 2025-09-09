@@ -14,12 +14,12 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            core_server: "tcp://localhost:9998".to_string(),
-            cred_dir: "/mnt/storage/datafed_rs/DataFed/".to_string(),
+            core_server: "tcp://172.17.0.1:9998".to_string(),
+            cred_dir: "/opt/datafed/keys/".to_string(),
             port: 10000,
             timeout: 5000,
             num_req_worker_threads: 4,
-            globus_collection_path: Some("/data".to_string()),
+            globus_collection_path: Some("/mnt/datafed-repo".to_string()),
         }
     }
 }
@@ -34,7 +34,7 @@ impl Config {
 
     /// Load the core server's public key from the credentials directory
     pub fn load_core_public_key(&self) -> Result<String, String> {
-        let key_path = format!("{}mock-datafed-core-key.pub", self.cred_dir);
+        let key_path = format!("{}datafed-core-key.pub", self.cred_dir);
         fs::read_to_string(&key_path)
             .map_err(|e| format!("Failed to load core public key from {}: {}", key_path, e))
             .map(|key| key.trim().to_string())
@@ -42,7 +42,7 @@ impl Config {
 
     /// Load the repo server's public key from the credentials directory
     pub fn load_repo_public_key(&self) -> Result<String, String> {
-        let key_path = format!("{}mock-datafed-core-key.pub", self.cred_dir);
+        let key_path = format!("{}datafed-repo-key.pub", self.cred_dir);
         fs::read_to_string(&key_path)
             .map_err(|e| format!("Failed to load repo public key from {}: {}", key_path, e))
             .map(|key| key.trim().to_string())
@@ -50,7 +50,7 @@ impl Config {
 
     /// Load the repo server's private key from the credentials directory
     pub fn load_repo_private_key(&self) -> Result<String, String> {
-        let key_path = format!("{}mock-datafed-core-key.priv", self.cred_dir);
+        let key_path = format!("{}datafed-repo-key.priv", self.cred_dir);
         fs::read_to_string(&key_path)
             .map_err(|e| format!("Failed to load repo private key from {}: {}", key_path, e))
             .map(|key| key.trim().to_string())

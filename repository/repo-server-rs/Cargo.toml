@@ -3,6 +3,14 @@ name = "repo-server-rs"
 version = "0.1.0"
 edition = "2024"
 
+[profile.release]
+# Optimize for compatibility and reduce glibc dependency
+lto = true
+codegen-units = 1
+strip = true
+
+
+
 [dependencies]
 ctrlc = "3.4.7"
 cxx = "1"
