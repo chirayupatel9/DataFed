@@ -15,7 +15,8 @@ fn print_usage() {
     eprintln!(
         "Usage:
   repo version
-  repo serve --cfg <config.toml>"
+  repo serve --cfg <config.toml>
+  repo --gen-keys [--cred-dir <dir>]"
     );
 }
 
@@ -27,9 +28,13 @@ fn main() {
 
     let args: Vec<String> = env::args().collect();
     
-    // Handle help and version commands
-    if args.len() > 1 {
-        match args[1].as_str() {
+    // Parse command line arguments
+    let mut gen_keys = false;
+    let mut cred_dir = None;
+    let mut i = 1;
+    
+    while i < args.len() {
+        match args[i].as_str() {
             "--help" | "-h" => {
                 print_usage();
                 return;
@@ -42,7 +47,44 @@ fn main() {
                 );
                 return;
             }
-            _ => {}
+            "--gen-keys" => {
+                gen_keys = true;
+            }
+            "--cred-dir" => {
+                if i + 1 < args.len() {
+                    cred_dir = Some(args[i + 1].clone());
+                    i += 1; // Skip the next argument since we consumed it
+                } else {
+                    eprintln!("Error: --cred-dir requires a directory path");
+                    return;
+                }
+            }
+            _ => {
+                eprintln!("Unknown argument: {}", args[i]);
+                print_usage();
+                return;
+            }
+        }
+        i += 1;
+    }
+    
+    // Handle key generation
+    if gen_keys {
+        let mut cfg = Config::default();
+        if let Some(dir) = cred_dir {
+            cfg.cred_dir = if dir.ends_with('/') { dir } else { format!("{}/", dir) };
+        }
+        cfg.normalize();
+        
+        match cfg.generate_and_save_keys() {
+            Ok(()) => {
+                println!("Key generation completed successfully");
+                return;
+            }
+            Err(e) => {
+                eprintln!("Key generation failed: {}", e);
+                return;
+            }
         }
     }
     

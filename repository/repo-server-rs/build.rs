@@ -10,14 +10,16 @@ fn main() {
         "src/cpp/DynaLog.cpp",
         "src/cpp/repo_bridge.cc",
     ])
-    .include("/opt/datafed/dependencies")
+    .include("/mnt/storage/opt/datafed/dependencies")
     .include("/mnt/storage/datafed_rs/DataFed/common/include")
     .include("/mnt/storage/datafed_rs/DataFed/build/common/proto")
     .include("./include")
-    .include("/opt/datafed/dependencies/include")
-    .include("/opt/datafed/dependencies/lib")
-    .include("/opt/datafed/dependencies/bin")
+    .include("/mnt/storage/opt/datafed/dependencies/include")
+    .include("/mnt/storage/opt/datafed/dependencies/lib")
+    .include("/mnt/storage/opt/datafed/dependencies/bin")
     .flag_if_supported("-std=c++17")
+    .flag_if_supported("-static-libgcc")
+    .flag_if_supported("-static-libstdc++")
     .compile("repo_bridge");
 
     // add near the end of build.rs
@@ -40,7 +42,7 @@ fn main() {
     println!("cargo:rustc-link-search=native=/mnt/storage/datafed_rs/DataFed/build/common");
     println!("cargo:rustc-link-lib=static=common");
     // println!("cargo:rustc-link-lib=static=datafed-protobuf"); // <- adjust to actual name if different
-    println!("cargo:rustc-link-search=native=/opt/datafed/dependencies/lib");
+    println!("cargo:rustc-link-search=native=/mnt/storage/opt/datafed/dependencies/lib");
     println!("cargo:rustc-link-lib=static=zmq");
 
     // Search paths for your static libs
@@ -195,4 +197,11 @@ fn main() {
     println!("cargo:rustc-link-lib=stdc++");
     #[cfg(target_os = "macos")]
     println!("cargo:rustc-link-lib=c++");
+
+    // Static linking configuration to avoid glibc compatibility issues
+    #[cfg(target_os = "linux")]
+    {
+        println!("cargo:rustc-link-arg=-static-libgcc");
+        println!("cargo:rustc-link-arg=-static-libstdc++");
+    }
 }
