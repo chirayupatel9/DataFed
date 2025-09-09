@@ -35,7 +35,7 @@ impl Config {
 
     /// Load the core server's public key from the credentials directory
     pub fn load_core_public_key(&self) -> Result<String, String> {
-        let key_path = format!("{}datafed-repo-key.pub", self.cred_dir);
+        let key_path = format!("{}datafed-core-key.pub", self.cred_dir);
         fs::read_to_string(&key_path)
             .map_err(|e| format!("Failed to load core public key from {}: {}", key_path, e))
             .map(|key| key.trim().to_string())
