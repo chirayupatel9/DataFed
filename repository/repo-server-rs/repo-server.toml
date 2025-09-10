@@ -1,5 +1,5 @@
 # Address of the DataFed core (the server will connect to it)
-core_server = "tcp://172.18.103.9:9998"
+core_server = "tcp://128.219.184.185:9998"
 
 # Directory that contains the key files used by the sample server code:
 #   datafed-repo-key.pub
@@ -8,7 +8,7 @@ core_server = "tcp://172.18.103.9:9998"
 cred_dir = "/opt/datafed/keys/"
 
 # Repo server listen port
-port = 10000
+port = 9000
 
 # Request timeout (ms)
 timeout = 20000
