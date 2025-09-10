@@ -59,18 +59,67 @@ impl Config {
     }
 
     pub fn load<P: AsRef<Path>>(p: P) -> Result<Self, String> {
-        // Read the TOML file
-        let content = fs::read_to_string(&p)
-            .map_err(|e| format!("Failed to read config file {}: {}", p.as_ref().display(), e))?;
+        // Start with default configuration
+        let mut cfg = Self::default();
         
-        // Parse the TOML content
-        let mut cfg: Config = toml::from_str(&content)
-            .map_err(|e| format!("Failed to parse TOML config: {}", e))?;
+        // Try to load from TOML file if it exists
+        if p.as_ref().exists() {
+            let content = fs::read_to_string(&p)
+                .map_err(|e| format!("Failed to read config file {}: {}", p.as_ref().display(), e))?;
+            
+            // Parse the TOML content and merge with defaults
+            let toml_cfg: Config = toml::from_str(&content)
+                .map_err(|e| format!("Failed to parse TOML config: {}", e))?;
+            
+            cfg = toml_cfg;
+        }
+        
+        // Override with environment variables if they exist
+        cfg.load_from_env();
         
         // Normalize the configuration
         cfg.normalize();
         
         Ok(cfg)
+    }
+    
+    /// Load configuration values from environment variables
+    pub fn load_from_env(&mut self) {
+        // Core server address
+        if let Ok(val) = std::env::var("DATAFED_CORE_ADDRESS_PORT_INTERNAL") {
+            self.core_server = val;
+        }
+        
+        // Credentials directory
+        if let Ok(val) = std::env::var("DATAFED_KEYS_DIR") {
+            self.cred_dir = val;
+        }
+        
+        // Port
+        if let Ok(val) = std::env::var("DATAFED_REPO_PORT") {
+            if let Ok(port) = val.parse::<u16>() {
+                self.port = port;
+            }
+        }
+        
+        // Timeout
+        if let Ok(val) = std::env::var("DATAFED_REPO_TIMEOUT") {
+            if let Ok(timeout) = val.parse::<u32>() {
+                self.timeout = timeout;
+            }
+        }
+        
+        // Number of worker threads
+        if let Ok(val) = std::env::var("DATAFED_REPO_WORKER_THREADS") {
+            if let Ok(threads) = val.parse::<usize>() {
+                self.num_req_worker_threads = threads;
+            }
+        }
+        
+        // Globus collection path
+        if let Ok(val) = std::env::var("DATAFED_GCS_COLLECTION_ROOT_PATH") {
+            self.globus_collection_path = Some(val);
+        }
     }
 
     /// Generate new server key pair using ZMQ curve keypair

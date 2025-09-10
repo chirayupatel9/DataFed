@@ -88,17 +88,22 @@ fn main() {
         }
     }
     
-    // Load configuration from TOML file
+    // Load configuration from TOML file and environment variables
     let cfg_path = "repo-server.toml";
     let cfg = match Config::load(cfg_path) {
         Ok(config) => {
-            println!("Successfully loaded configuration from {}", cfg_path);
+            if std::path::Path::new(cfg_path).exists() {
+                println!("Successfully loaded configuration from {} and environment variables", cfg_path);
+            } else {
+                println!("No TOML file found at {}, using defaults and environment variables", cfg_path);
+            }
             config
         }
         Err(e) => {
             eprintln!("Failed to load configuration from {}: {}", cfg_path, e);
-            eprintln!("Falling back to default configuration");
+            eprintln!("Falling back to default configuration and environment variables");
             let mut default_cfg = Config::default();
+            default_cfg.load_from_env();
             default_cfg.normalize();
             default_cfg
         }
