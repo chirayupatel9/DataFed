@@ -87,7 +87,12 @@ impl Config {
     pub fn load_from_env(&mut self) {
         // Core server address
         if let Ok(val) = std::env::var("DATAFED_CORE_ADDRESS_PORT_INTERNAL") {
-            self.core_server = val;
+            // Ensure the address has the tcp:// prefix
+            if val.starts_with("tcp://") {
+                self.core_server = val;
+            } else {
+                self.core_server = format!("tcp://{}", val);
+            }
         }
         
         // Credentials directory
