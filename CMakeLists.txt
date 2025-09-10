@@ -204,11 +204,14 @@ if( BUILD_DOCS )
   add_subdirectory( doc_source EXCLUDE_FROM_ALL )
 endif()
 
-# if( INSTALL_REPO_SERVER )
-#   # Should only need to do this on the same machine that Globus is installed
-#   install( TARGETS datafed-repo DESTINATION ${DATAFED_INSTALL_PATH}/repo )
-#   install( CODE "execute_process(COMMAND ${PROJECT_SOURCE_DIR}/scripts/install_repo_service.sh )")
-# endif()
+if( INSTALL_REPO_SERVER )
+  # Should only need to do this on the same machine that Globus is installed
+  # Only install the C++ target if it was built (not building Rust only)
+  if( TARGET datafed-repo )
+    install( TARGETS datafed-repo DESTINATION ${DATAFED_INSTALL_PATH}/repo )
+    install( CODE "execute_process(COMMAND ${PROJECT_SOURCE_DIR}/scripts/install_repo_service.sh )")
+  endif()
+endif()
 
 if( INSTALL_AUTHZ )
   install( TARGETS datafed-authz DESTINATION ${DATAFED_INSTALL_PATH}/authz )
