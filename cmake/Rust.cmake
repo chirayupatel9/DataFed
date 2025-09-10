@@ -64,6 +64,12 @@ function(build_rust_project PROJECT_NAME DEPENDENCY_PATH)
         @ONLY
     )
     
+    # Ensure build.rs is newer than build.rs.in to trigger rebuild
+    execute_process(
+        COMMAND ${CMAKE_COMMAND} -E touch "${RUST_PROJECT_DIR}/build.rs"
+        RESULT_VARIABLE TOUCH_RESULT
+    )
+    
     # Create a custom target for building the Rust project with static linking
     add_custom_target(${UNIQUE_TARGET_NAME} ALL
         COMMAND ${CMAKE_COMMAND} -E env
@@ -97,46 +103,80 @@ function(build_rust_project PROJECT_NAME DEPENDENCY_PATH)
     if(TARGET common)
         add_dependencies(${UNIQUE_TARGET_NAME} common)
     endif()
+    
+    # Add dependency on protobuf if it exists
+    if(TARGET datafed-protobuf)
+        add_dependencies(${UNIQUE_TARGET_NAME} datafed-protobuf)
+    endif()
+    
+    # Make this target part of the ALL target
+    set_target_properties(${UNIQUE_TARGET_NAME} PROPERTIES EXCLUDE_FROM_ALL FALSE)
 endfunction()
 
 # Function to install Rust binary
 function(install_rust_binary PROJECT_NAME)
-    # Check multiple possible binary locations
-    set(RUST_BINARY "")
+    # Defer binary existence check to install time
+    # We'll use a custom install target that checks for the binary at install time
     
-    # First check the custom target directory
-    if(EXISTS "${RUST_BINARY_DIR_ALT}/${PROJECT_NAME}")
-        set(RUST_BINARY "${RUST_BINARY_DIR_ALT}/${PROJECT_NAME}")
-        message(STATUS "Found Rust binary at: ${RUST_BINARY}")
-    elseif(EXISTS "${RUST_BINARY_DIR}/${PROJECT_NAME}")
-        set(RUST_BINARY "${RUST_BINARY_DIR}/${PROJECT_NAME}")
-        message(STATUS "Found Rust binary at: ${RUST_BINARY}")
-    # Check the default Cargo target directory
-    elseif(EXISTS "${RUST_PROJECT_DIR}/target/release/${PROJECT_NAME}")
-        set(RUST_BINARY "${RUST_PROJECT_DIR}/target/release/${PROJECT_NAME}")
-        message(STATUS "Found Rust binary at: ${RUST_BINARY}")
-    elseif(EXISTS "${RUST_PROJECT_DIR}/target/debug/${PROJECT_NAME}")
-        set(RUST_BINARY "${RUST_PROJECT_DIR}/target/debug/${PROJECT_NAME}")
-        message(STATUS "Found Rust binary at: ${RUST_BINARY}")
-    else()
-        message(FATAL_ERROR "Could not find Rust binary ${PROJECT_NAME} in any expected location")
+    # Add a custom install target that depends on the Rust build
+    get_filename_component(CURRENT_DIR_NAME ${CMAKE_CURRENT_SOURCE_DIR} NAME)
+    set(UNIQUE_TARGET_NAME "${PROJECT_NAME}-rust-${CURRENT_DIR_NAME}")
+    
+    # Create an install target that depends on the Rust build and handles binary installation
+    add_custom_target(${PROJECT_NAME}-install-rust
+        COMMAND ${CMAKE_COMMAND} -E echo "Installing Rust binary ${PROJECT_NAME}"
+        # Use a shell script to find and install the binary
+        COMMAND ${CMAKE_COMMAND} -E chdir ${CMAKE_CURRENT_BINARY_DIR}
+            bash -c "
+                BINARY_NAME='${PROJECT_NAME}'
+                INSTALL_BIN='${DATAFED_INSTALL_PATH}/bin'
+                INSTALL_REPO='${DATAFED_INSTALL_PATH}/repo'
+                
+                # Check multiple possible binary locations
+                if [ -f '${RUST_BINARY_DIR_ALT}/\$BINARY_NAME' ]; then
+                    BINARY_PATH='${RUST_BINARY_DIR_ALT}/\$BINARY_NAME'
+                    echo \"Found binary at: \$BINARY_PATH\"
+                elif [ -f '${RUST_BINARY_DIR}/\$BINARY_NAME' ]; then
+                    BINARY_PATH='${RUST_BINARY_DIR}/\$BINARY_NAME'
+                    echo \"Found binary at: \$BINARY_PATH\"
+                elif [ -f '${RUST_PROJECT_DIR}/target/release/\$BINARY_NAME' ]; then
+                    BINARY_PATH='${RUST_PROJECT_DIR}/target/release/\$BINARY_NAME'
+                    echo \"Found binary at: \$BINARY_PATH\"
+                elif [ -f '${RUST_PROJECT_DIR}/target/debug/\$BINARY_NAME' ]; then
+                    BINARY_PATH='${RUST_PROJECT_DIR}/target/debug/\$BINARY_NAME'
+                    echo \"Found binary at: \$BINARY_PATH\"
+                else
+                    echo \"ERROR: Could not find Rust binary \$BINARY_NAME in any expected location\"
+                    echo \"Checked locations:\"
+                    echo \"  - ${RUST_BINARY_DIR_ALT}/\$BINARY_NAME\"
+                    echo \"  - ${RUST_BINARY_DIR}/\$BINARY_NAME\"
+                    echo \"  - ${RUST_PROJECT_DIR}/target/release/\$BINARY_NAME\"
+                    echo \"  - ${RUST_PROJECT_DIR}/target/debug/\$BINARY_NAME\"
+                    exit 1
+                fi
+                
+                # Create install directories
+                mkdir -p \"\$INSTALL_BIN\"
+                mkdir -p \"\$INSTALL_REPO\"
+                
+                # Install binary to both locations
+                cp \"\$BINARY_PATH\" \"\$INSTALL_BIN/\$BINARY_NAME\"
+                cp \"\$BINARY_PATH\" \"\$INSTALL_REPO/\$BINARY_NAME\"
+                
+                # Set executable permissions
+                chmod +x \"\$INSTALL_BIN/\$BINARY_NAME\"
+                chmod +x \"\$INSTALL_REPO/\$BINARY_NAME\"
+                
+                echo \"Successfully installed \$BINARY_NAME to \$INSTALL_BIN and \$INSTALL_REPO\"
+            "
+        DEPENDS ${UNIQUE_TARGET_NAME}
+        COMMENT "Installing Rust binary ${PROJECT_NAME}"
+    )
+    
+    # Make the install target depend on the Rust build
+    if(TARGET install)
+        add_dependencies(install ${PROJECT_NAME}-install-rust)
     endif()
-    
-    # Install the binary file directly since custom targets can't be installed
-    install(FILES ${RUST_BINARY}
-        DESTINATION ${DATAFED_INSTALL_PATH}/bin
-        PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
-                   GROUP_READ GROUP_EXECUTE
-                   WORLD_READ WORLD_EXECUTE
-    )
-    
-    # Also install to repo directory
-    install(FILES ${RUST_BINARY}
-        DESTINATION ${DATAFED_INSTALL_PATH}/repo
-        PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
-                   GROUP_READ GROUP_EXECUTE
-                   WORLD_READ WORLD_EXECUTE
-    )
 endfunction()
 
 # Function to create test target for Rust project
