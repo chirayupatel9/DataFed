@@ -16,7 +16,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            core_server: "tcp://datafed-core:9998".to_string(),
+            core_server: "tcp://datafed-core:7512".to_string(),
             cred_dir: "/opt/datafed/keys/".to_string(),
             port: 9000,
             timeout: 5000,
