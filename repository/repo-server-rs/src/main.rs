@@ -88,10 +88,22 @@ fn main() {
         }
     }
     
-    // Use default config from config.rs, ignore TOML file
-    let mut cfg = Config::default();
-    cfg.normalize();
-    println!("Using default config from config.rs");
+    // Load configuration from TOML file
+    let cfg_path = "repo-server.toml";
+    let cfg = match Config::load(cfg_path) {
+        Ok(config) => {
+            println!("Successfully loaded configuration from {}", cfg_path);
+            config
+        }
+        Err(e) => {
+            eprintln!("Failed to load configuration from {}: {}", cfg_path, e);
+            eprintln!("Falling back to default configuration");
+            let mut default_cfg = Config::default();
+            default_cfg.normalize();
+            default_cfg
+        }
+    };
+    
     println!("Config: core_server={}, cred_dir={}, port={}", cfg.core_server, cfg.cred_dir, cfg.port);
     let mut srv = RepoServer::new(cfg);
     println!("Server created, starting run method...");
@@ -99,29 +111,4 @@ fn main() {
     println!("Server run method returned, calling join...");
     srv.join();
     println!("Server join completed, main function ending...");
-    // match args[1].as_str() {
-    //     "version" => {
-    //         println!(
-    //             "repo {}.{}.{}\napi  {}.{}",
-    //             version::repo_major(), version::repo_minor(), version::repo_patch(),
-    //             version::api_major(),  version::api_minor()
-    //         );
-    //     }
-    //     "serve" => {
-    //         // Robust parse for --cfg
-    //         let cfg_path: String = args.windows(2)
-    //             .find(|w| w[0] == "--cfg")
-    //             .map(|w| w[1].clone())
-    //             .unwrap_or_else(|| "repo-server.toml".to_string());
-
-    //         let cfg = Config::load(&cfg_path).expect("failed to load config");
-    //         let mut srv = RepoServer::new(cfg);
-    //         srv.run();   // blocking
-    //         srv.join();
-    //     }
-    //     _ => {
-    //         print_usage();
-    //         process::exit(2);
-    //     }
-    // }
 }

@@ -1,8 +1,9 @@
 // src/config.rs
 use std::{fs, path::Path};
 use std::io::Write;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
     pub core_server: String,               // e.g., tcp://localhost:9998
     pub cred_dir: String,                  // ensure trailing '/'
@@ -15,7 +16,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            core_server: "tcp://128.219.184.185:9998".to_string(),
+            core_server: "tcp://datafed-core:9998".to_string(),
             cred_dir: "/opt/datafed/keys/".to_string(),
             port: 9000,
             timeout: 5000,
@@ -58,11 +59,17 @@ impl Config {
     }
 
     pub fn load<P: AsRef<Path>>(p: P) -> Result<Self, String> {
-        // If you have a real config format, parse it here.
-        // For now, load defaults and normalize.
-        let _ = fs::read_to_string(&p).map_err(|e| format!("read config: {e}"))?;
-        let mut cfg = Self::default();
+        // Read the TOML file
+        let content = fs::read_to_string(&p)
+            .map_err(|e| format!("Failed to read config file {}: {}", p.as_ref().display(), e))?;
+        
+        // Parse the TOML content
+        let mut cfg: Config = toml::from_str(&content)
+            .map_err(|e| format!("Failed to parse TOML config: {}", e))?;
+        
+        // Normalize the configuration
         cfg.normalize();
+        
         Ok(cfg)
     }
 
