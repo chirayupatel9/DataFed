@@ -225,26 +225,44 @@ function(add_rust_run_target PROJECT_NAME CONFIG_FILE DEPENDENCY_PATH)
         return()
     endif()
     
-    # Check multiple possible binary locations
-    if(EXISTS "${RUST_BINARY_DIR_ALT}/${PROJECT_NAME}")
-        set(RUST_BINARY "${RUST_BINARY_DIR_ALT}/${PROJECT_NAME}")
-    elseif(EXISTS "${RUST_BINARY_DIR}/${PROJECT_NAME}")
-        set(RUST_BINARY "${RUST_BINARY_DIR}/${PROJECT_NAME}")
-    elseif(EXISTS "${RUST_PROJECT_DIR}/target/release/${PROJECT_NAME}")
-        set(RUST_BINARY "${RUST_PROJECT_DIR}/target/release/${PROJECT_NAME}")
-    elseif(EXISTS "${RUST_PROJECT_DIR}/target/debug/${PROJECT_NAME}")
-        set(RUST_BINARY "${RUST_PROJECT_DIR}/target/debug/${PROJECT_NAME}")
-    else()
-        message(FATAL_ERROR "Could not find Rust binary ${PROJECT_NAME} for run target")
-    endif()
-    
+    # Defer binary existence check to runtime
     set(CONFIG_PATH "${RUST_PROJECT_DIR}/${CONFIG_FILE}")
     
-    # Create a run target
+    # Create a run target that finds the binary at runtime
     add_custom_target(${UNIQUE_TARGET_NAME}
-        COMMAND ${CMAKE_COMMAND} -E env
-            LD_LIBRARY_PATH=${DEPENDENCY_PATH}/lib:$ENV{LD_LIBRARY_PATH}
-            ${RUST_BINARY} --cfg ${CONFIG_PATH}
+        COMMAND ${CMAKE_COMMAND} -E chdir ${CMAKE_CURRENT_BINARY_DIR}
+            bash -c "
+                BINARY_NAME='${PROJECT_NAME}'
+                CONFIG_FILE='${CONFIG_PATH}'
+                LD_LIBRARY_PATH='${DEPENDENCY_PATH}/lib:'\"\$LD_LIBRARY_PATH\"
+                
+                # Check multiple possible binary locations
+                if [ -f '${RUST_BINARY_DIR_ALT}/\$BINARY_NAME' ]; then
+                    BINARY_PATH='${RUST_BINARY_DIR_ALT}/\$BINARY_NAME'
+                    echo \"Found binary at: \$BINARY_PATH\"
+                elif [ -f '${RUST_BINARY_DIR}/\$BINARY_NAME' ]; then
+                    BINARY_PATH='${RUST_BINARY_DIR}/\$BINARY_NAME'
+                    echo \"Found binary at: \$BINARY_PATH\"
+                elif [ -f '${RUST_PROJECT_DIR}/target/release/\$BINARY_NAME' ]; then
+                    BINARY_PATH='${RUST_PROJECT_DIR}/target/release/\$BINARY_NAME'
+                    echo \"Found binary at: \$BINARY_PATH\"
+                elif [ -f '${RUST_PROJECT_DIR}/target/debug/\$BINARY_NAME' ]; then
+                    BINARY_PATH='${RUST_PROJECT_DIR}/target/debug/\$BINARY_NAME'
+                    echo \"Found binary at: \$BINARY_PATH\"
+                else
+                    echo \"ERROR: Could not find Rust binary \$BINARY_NAME for run target\"
+                    echo \"Checked locations:\"
+                    echo \"  - ${RUST_BINARY_DIR_ALT}/\$BINARY_NAME\"
+                    echo \"  - ${RUST_BINARY_DIR}/\$BINARY_NAME\"
+                    echo \"  - ${RUST_PROJECT_DIR}/target/release/\$BINARY_NAME\"
+                    echo \"  - ${RUST_PROJECT_DIR}/target/debug/\$BINARY_NAME\"
+                    exit 1
+                fi
+                
+                # Run the binary with the config file
+                echo \"Running \$BINARY_NAME with config: \$CONFIG_FILE\"
+                LD_LIBRARY_PATH=\"\$LD_LIBRARY_PATH\" \"\$BINARY_PATH\" --cfg \"\$CONFIG_FILE\"
+            "
         DEPENDS ${PROJECT_NAME}-rust-${CURRENT_DIR_NAME}
         COMMENT "Running Rust project ${PROJECT_NAME}"
         VERBATIM
