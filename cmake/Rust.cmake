@@ -73,15 +73,15 @@ function(build_rust_project PROJECT_NAME DEPENDENCY_PATH)
     # Create a custom target for building the Rust project with static linking
     add_custom_target(${UNIQUE_TARGET_NAME} ALL
         COMMAND ${CMAKE_COMMAND} -E env
-            CARGO_TARGET_DIR=${RUST_TARGET_DIR}
             LD_LIBRARY_PATH=${DEPENDENCY_PATH}/lib:$ENV{LD_LIBRARY_PATH}
             ${CARGO} build --${RUST_BUILD_TYPE}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${RUST_BINARY_DIR}
+        # Copy binary from project target directory to CMake build directory
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${RUST_PROJECT_PATH}/target/${RUST_BUILD_TYPE}/${PROJECT_NAME}
+            ${RUST_PROJECT_DIR}/target/${RUST_BUILD_TYPE}/${PROJECT_NAME}
             ${RUST_BINARY_DIR}/${PROJECT_NAME}
         WORKING_DIRECTORY ${RUST_PROJECT_PATH}
-        COMMENT "Building Rust project ${PROJECT_NAME} with CARGO_TARGET_DIR=${RUST_TARGET_DIR}"
+        COMMENT "Building Rust project ${PROJECT_NAME} and copying to ${RUST_BINARY_DIR}"
         VERBATIM
     )
     
