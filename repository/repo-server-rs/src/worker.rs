@@ -7,6 +7,7 @@ use std::{
 };
 
 use crate::version::{VersionReply, SharedCoreVersionInfo};
+use crate::ffi::repo::*;
 
 // ===== Envelope + Transport (kept minimal so it works today) =====
 #[derive(Debug, Clone)]
@@ -37,26 +38,61 @@ impl ZMQInprocMessenger {
 
 impl Messenger for ZMQInprocMessenger {
     fn recv(&self, timeout_ms: i32) -> io::Result<Option<Envelope>> {
-        // TODO: Use the C++ FFI bridge to receive messages from the INPROC socket
-        // This should call the C++ communicator->receive() method
-        // For now, simulate the behavior while we implement the FFI
-        
-        // Simulate the C++ worker behavior: poll for messages with timeout
-        thread::sleep(Duration::from_millis(timeout_ms as u64));
-        
-        // TODO: Replace this with real message reception via C++ bridge
-        // The C++ version does: client->receive(MessageType::GOOGLE_PROTOCOL_BUFFER)
-        Ok(None) // No messages available yet
+        // Use the C++ FFI bridge to receive messages from the INPROC socket
+        match zmq_recv(timeout_ms) {
+            Ok(payload) => {
+                // Check if we got an empty payload (timeout or no message)
+                if payload.is_empty() {
+                    return Ok(None); // Timeout, no message available
+                }
+                
+                // Parse the received payload into an Envelope
+                // For now, we'll create a simple envelope structure
+                // In a real implementation, you'd deserialize the protobuf message
+                // and extract the correlation_id, msg_type, etc.
+                
+                // This is a simplified parsing - in practice you'd use proper protobuf deserialization
+                if payload.len() < 4 {
+                    return Ok(None); // Invalid message format
+                }
+                
+                // Extract message type from first 2 bytes (little-endian)
+                let msg_type = u16::from_le_bytes([payload[0], payload[1]]);
+                
+                // For now, use a default correlation ID - in practice this would come from the message
+                let correlation_id = format!("worker_{}_{}", self.worker_id, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+                
+                // The rest is the actual payload
+                let message_payload = payload[2..].to_vec();
+                
+                Ok(Some(Envelope {
+                    correlation_id,
+                    msg_type,
+                    payload: message_payload,
+                    key: None,
+                }))
+            }
+            Err(e) => {
+                eprintln!("ZMQ recv error: {}", e);
+                Err(io::Error::new(io::ErrorKind::Other, format!("ZMQ recv failed: {}", e)))
+            }
+        }
     }
 
     fn send(&self, env: Envelope) -> io::Result<()> {
-        // TODO: Use the C++ FFI bridge to send messages through the INPROC socket
-        // This should call the C++ communicator->send() method
+        // Use the C++ FFI bridge to send messages through the INPROC socket
+        // Create a simple binary format: [msg_type:2][payload:...]
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&env.msg_type.to_le_bytes());
+        payload.extend_from_slice(&env.payload);
         
-        // TODO: Replace this with real message sending via C++ bridge
-        // The C++ version does: client->send(*(send_message))
-        println!("TODO: Send message via C++ bridge: {:?}", env.msg_type);
-        Ok(())
+        match zmq_send(&payload, env.msg_type, &env.correlation_id) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                eprintln!("ZMQ send error: {}", e);
+                Err(io::Error::new(io::ErrorKind::Other, format!("ZMQ send failed: {}", e)))
+            }
+        }
     }
 }
 

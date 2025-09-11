@@ -21,3 +21,9 @@ namespace ServerBridge {
     void server_stop();
     void server_join();
 } // namespace ServerBridge
+
+namespace ZMQBridge {
+    
+    rust::Vec<std::uint8_t> zmq_recv(std::int32_t timeout_ms);
+    void zmq_send(rust::Slice<const std::uint8_t> payload, std::uint16_t msg_type, rust::Str correlation_id);
+} // namespace ZMQBridge

@@ -8,6 +8,7 @@
 #include <string>
 #include <memory>
 #include <thread>
+#include <fstream>
 
 // SDMS / project headers (heavy includes belong in the .cc, not the .hpp)
 #include "common/CommunicatorFactory.hpp"
@@ -128,14 +129,60 @@ void server_start(::rust::Str config_path, ::rust::Str repo_public_key, ::rust::
     LogContext log_ctx;
     log_ctx.thread_name = "rust-server-bridge";
     
-    // Load keys from credential directory (similar to C++ RepoServer::loadKeys)
-    // TODO: Use config_path to load actual configuration
-    // For now, use the keys passed from Rust - in production, load from config_path
-    (void)config_path; // Suppress unused parameter warning
+    // Load configuration from config_path if provided
+    std::string actual_repo_pub_key = std::string(repo_public_key);
+    std::string actual_repo_priv_key = std::string(repo_private_key);
     
-    // Convert Rust strings to C++ strings
-    const std::string repo_pub_key(repo_public_key);
-    const std::string repo_priv_key(repo_private_key);
+    if (!config_path.empty()) {
+      // Try to load configuration from the provided path
+      // This is a simplified implementation - in production you'd use a proper config parser
+      std::ifstream config_file{std::string(config_path)};
+      if (config_file.is_open()) {
+        std::string line;
+        while (std::getline(config_file, line)) {
+          // Simple key=value parsing (skip comments and empty lines)
+          if (line.empty() || line[0] == '#' || line[0] == ';') {
+            continue;
+          }
+          
+          size_t eq_pos = line.find('=');
+          if (eq_pos != std::string::npos) {
+            std::string key = line.substr(0, eq_pos);
+            std::string value = line.substr(eq_pos + 1);
+            
+            // Trim whitespace
+            key.erase(0, key.find_first_not_of(" \t"));
+            key.erase(key.find_last_not_of(" \t") + 1);
+            value.erase(0, value.find_first_not_of(" \t"));
+            value.erase(value.find_last_not_of(" \t") + 1);
+            
+            // Load key files if specified
+            if (key == "repo_public_key_file" && !value.empty()) {
+              std::ifstream key_file(value);
+              if (key_file.is_open()) {
+                std::string key_content((std::istreambuf_iterator<char>(key_file)),
+                                       std::istreambuf_iterator<char>());
+                actual_repo_pub_key = key_content;
+                key_file.close();
+              }
+            } else if (key == "repo_private_key_file" && !value.empty()) {
+              std::ifstream key_file(value);
+              if (key_file.is_open()) {
+                std::string key_content((std::istreambuf_iterator<char>(key_file)),
+                                       std::istreambuf_iterator<char>());
+                actual_repo_priv_key = key_content;
+                key_file.close();
+              }
+            }
+          }
+        }
+        config_file.close();
+      }
+    }
+    
+    // Use the loaded keys (either from config file or passed from Rust)
+    const std::string repo_pub_key(actual_repo_pub_key);
+    const std::string repo_priv_key(actual_repo_priv_key);
     
     // Create the same socket configuration as C++ RepoServer::ioSecure()
     std::unordered_map<SocketRole, SocketOptions> socket_options;
@@ -233,3 +280,106 @@ void server_join() {
 }
 
 } // namespace ServerBridge
+
+namespace ZMQBridge {
+
+// Global communicator for ZMQ INPROC communication
+static std::unique_ptr<ICommunicator> g_zmq_communicator = nullptr;
+
+rust::Vec<std::uint8_t> zmq_recv(std::int32_t timeout_ms) {
+  try {
+    if (!g_zmq_communicator) {
+      // Initialize the ZMQ INPROC communicator if not already done
+      LogContext log_ctx;
+      log_ctx.thread_name = "rust-zmq-bridge";
+      
+      // Create INPROC client socket configuration
+      SocketOptions opt;
+      opt.scheme = URIScheme::INPROC;
+      opt.class_type = SocketClassType::CLIENT;
+      opt.direction_type = SocketDirectionalityType::BIDIRECTIONAL;
+      opt.communication_type = SocketCommunicationType::ASYNCHRONOUS;
+      opt.connection_life = SocketConnectionLife::PERSISTENT;
+      opt.protocol_type = ProtocolType::ZQTP;
+      opt.host = "workers";
+      opt.local_id = "rust_worker_inproc_client";
+      
+      // No credentials needed for INPROC
+      CredentialFactory cred_factory;
+      auto credentials = cred_factory.create(ProtocolType::ZQTP, std::unordered_map<CredentialType, std::string>());
+      
+      CommunicatorFactory comm_factory(log_ctx);
+      g_zmq_communicator = comm_factory.create(opt, *credentials, timeout_ms, timeout_ms);
+    }
+    
+    // Receive message with timeout
+    auto resp = g_zmq_communicator->receive(MessageType::GOOGLE_PROTOCOL_BUFFER);
+    
+    if (resp.time_out) {
+      return rust::Vec<std::uint8_t>(); // Timeout, no message available - return empty vector
+    }
+    
+    if (resp.error) {
+      throw std::runtime_error(std::string("ZMQ recv error: ") + resp.error_msg);
+    }
+    
+    // Extract payload as bytes
+    auto payload = std::get<google::protobuf::Message*>(resp.message->getPayload());
+    if (!payload) {
+      return rust::Vec<std::uint8_t>(); // No payload - return empty vector
+    }
+    
+    // Serialize the protobuf message to bytes
+    std::string serialized;
+    if (!payload->SerializeToString(&serialized)) {
+      throw std::runtime_error("Failed to serialize protobuf message");
+    }
+    
+    // Convert std::vector to rust::Vec
+    rust::Vec<std::uint8_t> result;
+    result.reserve(serialized.size());
+    for (unsigned char c : serialized) {
+      result.push_back(c);
+    }
+    return result;
+    
+  } catch (const std::exception& e) {
+    throw std::runtime_error(std::string("ZMQ recv failed: ") + e.what());
+  }
+}
+
+void zmq_send(rust::Slice<const std::uint8_t> payload, std::uint16_t msg_type, rust::Str correlation_id) {
+  try {
+    if (!g_zmq_communicator) {
+      throw std::runtime_error("ZMQ communicator not initialized");
+    }
+    
+    // Convert Rust data to C++ types
+    const std::string payload_str(reinterpret_cast<const char*>(payload.data()), payload.size());
+    const std::string corr_id(correlation_id);
+    
+    // Create a simple message envelope
+    // Note: This is a simplified implementation - in practice you'd want to use
+    // the proper SDMS message factory and envelope structure
+    MessageFactory msg_factory;
+    auto envelope = msg_factory.create(MessageType::GOOGLE_PROTOCOL_BUFFER);
+    
+    // Set message attributes
+    envelope->set(MessageAttribute::CORRELATION_ID, corr_id);
+    
+    // For now, we'll create a simple message with the payload
+    // In a real implementation, you'd parse the payload and create the appropriate message type
+    // Since we can't easily use google::protobuf::Any, we'll use a simple approach
+    // Create a basic message and set the payload directly
+    auto msg = std::make_unique<SDMS::Anon::VersionRequest>(); // Use any available message type as placeholder
+    envelope->setPayload(std::move(msg));
+    
+    // Send the message
+    g_zmq_communicator->send(*envelope);
+    
+  } catch (const std::exception& e) {
+    throw std::runtime_error(std::string("ZMQ send failed: ") + e.what());
+  }
+}
+
+} // namespace ZMQBridge

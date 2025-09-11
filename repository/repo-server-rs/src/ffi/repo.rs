@@ -31,6 +31,12 @@ mod ffi {
 
         #[namespace = "ServerBridge"]
         fn server_join() -> Result<()>;
+
+        #[namespace = "ZMQBridge"]
+        fn zmq_recv(timeout_ms: i32) -> Result<Vec<u8>>;
+
+        #[namespace = "ZMQBridge"]
+        fn zmq_send(payload: &[u8], msg_type: u16, correlation_id: &str) -> Result<()>;
     }
 }
 pub use ffi::*;
