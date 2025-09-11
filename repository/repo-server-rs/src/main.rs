@@ -93,17 +93,17 @@ fn main() {
     let cfg = match Config::load(cfg_path) {
         Ok(config) => {
             if std::path::Path::new(cfg_path).exists() {
-                println!("Successfully loaded configuration from {} and environment variables", cfg_path);
+                println!("Successfully loaded configuration from {}", cfg_path);
             } else {
-                println!("No TOML file found at {}, using defaults and environment variables", cfg_path);
+                println!("No TOML file found at {}, using defaults", cfg_path);
             }
             config
         }
         Err(e) => {
             eprintln!("Failed to load configuration from {}: {}", cfg_path, e);
-            eprintln!("Falling back to default configuration and environment variables");
+            eprintln!("Falling back to default configuration");
             let mut default_cfg = Config::default();
-            default_cfg.load_from_env();
+            // default_cfg.load_from_env(); // Commented out - only use defaults
             default_cfg.normalize();
             default_cfg
         }

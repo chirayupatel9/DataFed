@@ -75,7 +75,7 @@ impl Config {
         }
         
         // Override with environment variables if they exist
-        cfg.load_from_env();
+        // cfg.load_from_env();  // Commented out - only use TOML and defaults
         
         // Normalize the configuration
         cfg.normalize();
