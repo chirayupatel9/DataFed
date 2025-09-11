@@ -31,6 +31,7 @@ fn main() {
     // Parse command line arguments
     let mut gen_keys = false;
     let mut cred_dir = None;
+    let mut config_file = None;
     let mut i = 1;
     
     while i < args.len() {
@@ -46,6 +47,30 @@ fn main() {
                     version::api_major(),  version::api_minor()
                 );
                 return;
+            }
+            "serve" => {
+                // Handle serve command - look for --cfg argument
+                i += 1;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "--cfg" => {
+                            if i + 1 < args.len() {
+                                config_file = Some(args[i + 1].clone());
+                                i += 1; // Skip the config file path
+                            } else {
+                                eprintln!("Error: --cfg requires a config file path");
+                                return;
+                            }
+                        }
+                        _ => {
+                            eprintln!("Unknown argument for serve: {}", args[i]);
+                            print_usage();
+                            return;
+                        }
+                    }
+                    i += 1;
+                }
+                break; // Exit the main loop since we handled serve
             }
             "--gen-keys" => {
                 gen_keys = true;
@@ -89,10 +114,10 @@ fn main() {
     }
     
     // Load configuration from TOML file and environment variables
-    let cfg_path = "repo-server.toml";
-    let cfg = match Config::load(cfg_path) {
+    let cfg_path = config_file.unwrap_or_else(|| "repo-server.toml".to_string());
+    let cfg = match Config::load(&cfg_path) {
         Ok(config) => {
-            if std::path::Path::new(cfg_path).exists() {
+            if std::path::Path::new(&cfg_path).exists() {
                 println!("Successfully loaded configuration from {}", cfg_path);
             } else {
                 println!("No TOML file found at {}, using defaults", cfg_path);
