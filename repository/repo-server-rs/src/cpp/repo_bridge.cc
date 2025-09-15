@@ -344,7 +344,7 @@ rust::Vec<std::uint8_t> zmq_recv(std::int32_t timeout_ms) {
   }
 }
 
-void zmq_send(rust::Slice<const std::uint8_t> payload, std::uint16_t msg_type, rust::Str correlation_id) {
+void zmq_send(rust::Slice<const std::uint8_t> payload, std::uint16_t _msg_type, rust::Str correlation_id) {
   try {
     // Create a new communicator for each call to avoid race conditions
     LogContext log_ctx;

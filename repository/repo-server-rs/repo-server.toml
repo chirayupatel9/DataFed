@@ -18,4 +18,4 @@ timeout = 20000
 num_req_worker_threads = 4
 
 # Optional
-globus_collection_path = ""
+globus_collection_path = "/mnt/storage/datafed_rs/DataFed/data"

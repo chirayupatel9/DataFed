@@ -1,6 +1,32 @@
-use std::path::Path;
-
 fn main() {
+    // Generate protobuf code if proto files exist
+    let proto_dir = "common/proto/";
+    let proto_files = [
+        "SDMS.proto",
+        "SDMS_Anon.proto", 
+        "SDMS_Auth.proto",
+        "Version.proto",
+    ];
+    
+    // Check if proto directory exists
+    if std::path::Path::new(proto_dir).exists() {
+        let full_paths: Vec<String> = proto_files.iter()
+            .map(|f| format!("{}{}", proto_dir, f))
+            .collect();
+        
+        let mut prost_build = prost_build::Config::new();
+        prost_build
+            .type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]");
+        
+        if let Err(e) = prost_build.compile_protos(&full_paths, &[proto_dir]) {
+            eprintln!("Warning: Failed to compile protobuf files: {}", e);
+            eprintln!("Continuing without protobuf support...");
+        }
+    } else {
+        eprintln!("Warning: Proto directory {} not found, continuing without protobuf support", proto_dir);
+    }
+
+    // Original CXX build
     cxx_build::bridges(&[
         "src/ffi/dynalog.rs", // logging bridge
         "src/ffi/repo.rs",    // send_version_request bridge

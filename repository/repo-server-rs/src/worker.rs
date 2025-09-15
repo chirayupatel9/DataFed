@@ -8,6 +8,10 @@ use std::{
 
 use crate::version::{VersionReply, SharedCoreVersionInfo};
 use crate::ffi::repo::*;
+use crate::message::*;
+use crate::path_utils::*;
+use crate::ffi::dynalog::{LogCtx, level};
+use crate::{dl_info, dl_log};
 
 // ===== Envelope + Transport (kept minimal so it works today) =====
 #[derive(Debug, Clone)]
@@ -81,13 +85,14 @@ impl Messenger for ZMQInprocMessenger {
 
     fn send(&self, env: Envelope) -> io::Result<()> {
         // Use the C++ FFI bridge to send messages through the INPROC socket
-        // Create a simple binary format: [msg_type:2][payload:...]
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&env.msg_type.to_le_bytes());
-        payload.extend_from_slice(&env.payload);
-        
-        match zmq_send(&payload, env.msg_type, &env.correlation_id) {
-            Ok(()) => Ok(()),
+        // Send the payload directly - the C++ side will handle message type routing
+        println!("ZMQInprocMessenger::send called: msg_type={}, corr_id={}, payload_len={}", 
+                 env.msg_type, env.correlation_id, env.payload.len());
+        match zmq_send(&env.payload, env.msg_type, &env.correlation_id) {
+            Ok(()) => {
+                println!("ZMQInprocMessenger::send successful");
+                Ok(())
+            },
             Err(e) => {
                 eprintln!("ZMQ send error: {}", e);
                 Err(io::Error::new(io::ErrorKind::Other, format!("ZMQ send failed: {}", e)))
@@ -102,16 +107,8 @@ impl Default for ZMQInprocMessenger {
     }
 }
 
-// ===== Message type IDs (adjust to your real mapper when you wire proto) =====
-const MT_VERSION_REQUEST: u16            = 1;
-const MT_VERSION_REPLY: u16              = 2;
-const MT_REPO_DATA_DELETE_REQUEST: u16   = 1001;
-const MT_REPO_DATA_GET_SIZE_REQUEST: u16 = 1002;
-const MT_REPO_PATH_CREATE_REQUEST: u16   = 1003;
-const MT_REPO_PATH_DELETE_REQUEST: u16   = 1004;
-// simple acks/nacks for now
-const MT_ACK_REPLY: u16                  = 1100;
-const MT_NACK_REPLY: u16                 = 9999;
+// Use message type constants from the message module
+use crate::message::message_types::*;
 
 /// Spawn one worker thread. Replace `NoopMessenger` with your real inproc client later.
 pub fn spawn_worker<M: Messenger + Clone + 'static>(
@@ -122,77 +119,105 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
     version_info: SharedCoreVersionInfo,
 ) -> std::thread::JoinHandle<()> {
     let base_root = base_path.into();
+    let path_sanitizer = PathSanitizer::new(&base_root);
 
     thread::spawn(move || {
-        println!("worker[{id}] starting, running flag: {}", running.load(Ordering::Relaxed));
+        let log_ctx = LogCtx {
+            thread_name: format!("worker-{}", id),
+            correlation_id: String::new(),
+            thread_id: id as i32,
+        };
+        
+        dl_info!(log_ctx, "Worker {} starting, running flag: {}", id, running.load(Ordering::Relaxed));
+        
         while running.load(Ordering::Relaxed) {
             match messenger.recv(1000) { // Increased timeout to 100ms
                 Ok(Some(env)) => {
-                    println!("worker[{id}] received message: {:?}", env.msg_type);
+                    let mut msg_ctx = log_ctx.clone();
+                    msg_ctx.correlation_id = env.correlation_id.clone();
+                    
+                    dl_info!(msg_ctx, "Received message type: {} (0x{:x})", env.msg_type, env.msg_type);
                     // --- decode, dispatch, reply (DONE) ---
                     let correlation_id = env.correlation_id.clone();
 
-                    // Route by message type. For now:
-                    // - VersionRequest -> VersionReply (empty payload stub)
-                    // - Repo* requests  -> AckReply (empty payload stub)
-                    // - Unknown         -> NackReply (json payload with error)
-                    let (reply_type, payload) = match env.msg_type {
-                        MT_VERSION_REQUEST => {
+                    // Route by message type with proper error handling
+                    let (reply_type, payload) =                     match env.msg_type {
+                        VERSION_REQUEST => {
+                            dl_info!(msg_ctx, "Processing version request");
                             // Use version info from core server if available, otherwise fall back to local
                             let version_reply = {
                                 let info = version_info.read().unwrap();
                                 if info.is_connected {
+                                    dl_info!(msg_ctx, "Using core server version info");
                                     info.version_reply.clone()
                                 } else {
+                                    dl_info!(msg_ctx, "Using local fallback version info");
                                     VersionReply::new() // fallback to local version
                                 }
                             };
-                            (MT_VERSION_REPLY, version_reply.to_bytes())
+                            dl_info!(msg_ctx, "Version reply: {}.{}.{}", version_reply.component_major, version_reply.component_minor, version_reply.component_patch);
+                            (VERSION_REPLY, version_reply.to_bytes())
                         }
-                        MT_REPO_DATA_DELETE_REQUEST => {
+                        REPO_DATA_DELETE_REQUEST => {
+                            dl_info!(msg_ctx, "Processing data delete request");
                             // Parse payload to get paths and delete under base_root
                             match parse_delete_request(&env.payload) {
                                 Ok(paths) => {
+                                    dl_info!(msg_ctx, "Parsed {} paths for deletion", paths.len());
                                     let mut success_count = 0;
                                     let mut error_count = 0;
                                     
                                     for path in paths {
-                                        let full_path = base_root.join(&path);
-                                        
-                                        // Security check: ensure path is within base_root
-                                        if !full_path.starts_with(&base_root) {
-                                            eprintln!("Security violation: path {} is outside base root", full_path.display());
-                                            error_count += 1;
-                                            continue;
-                                        }
-                                        
-                                        match std::fs::remove_file(&full_path) {
-                                            Ok(()) => {
-                                                println!("Deleted file: {}", full_path.display());
-                                                success_count += 1;
+                                        dl_info!(msg_ctx, "Processing delete for path: {}", path);
+                                        // Use path sanitizer for security
+                                        match path_sanitizer.sanitize_path(&path) {
+                                            Ok(sanitized) => {
+                                                dl_info!(msg_ctx, "Sanitized path: {}", sanitized.local_path.display());
+                                                // Additional security validation
+                                                if let Err(e) = path_sanitizer.validate_path_security(&sanitized.local_path) {
+                                                    dl_log!(level::ERROR, msg_ctx, "Security violation: {}", e);
+                                                    error_count += 1;
+                                                    continue;
+                                                }
+                                                
+                                                match std::fs::remove_file(&sanitized.local_path) {
+                                                    Ok(()) => {
+                                                        dl_info!(msg_ctx, "Successfully deleted file: {}", sanitized.local_path.display());
+                                                        success_count += 1;
+                                                    }
+                                                    Err(e) => {
+                                                        dl_log!(level::ERROR, msg_ctx, "Failed to delete {}: {}", sanitized.local_path.display(), e);
+                                                        error_count += 1;
+                                                    }
+                                                }
                                             }
                                             Err(e) => {
-                                                eprintln!("Failed to delete {}: {}", full_path.display(), e);
+                                                dl_log!(level::ERROR, msg_ctx, "Path sanitization failed for {}: {}", path, e);
                                                 error_count += 1;
                                             }
                                         }
                                     }
                                     
                                     if error_count == 0 {
-                                        (MT_ACK_REPLY, Vec::new())
+                                        (ACK_REPLY, Vec::new())
                                     } else {
-                                        let error_msg = format!("Deleted {} files, {} errors", success_count, error_count);
-                                        let body = encode_nack(-1, error_msg);
-                                        (MT_NACK_REPLY, body)
+                                        let nack = NackReply {
+                                            err_code: ErrorCode::InternalError as i32,
+                                            err_msg: format!("Deleted {} files, {} errors", success_count, error_count),
+                                        };
+                                        (NACK_REPLY, nack.serialize().unwrap_or_default())
                                     }
                                 }
                                 Err(e) => {
-                                    let body = encode_nack(-3, format!("Failed to parse delete request: {}", e));
-                                    (MT_NACK_REPLY, body)
+                                    let nack = NackReply {
+                                        err_code: ErrorCode::ParseError as i32,
+                                        err_msg: format!("Failed to parse delete request: {}", e),
+                                    };
+                                    (NACK_REPLY, nack.serialize().unwrap_or_default())
                                 }
                             }
                         }
-                        MT_REPO_DATA_GET_SIZE_REQUEST => {
+                        REPO_DATA_GET_SIZE_REQUEST => {
                             // Parse payload to get paths and compute sizes under base_root
                             match parse_size_request(&env.payload) {
                                 Ok(paths) => {
@@ -201,24 +226,31 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
                                     let mut error_count = 0;
                                     
                                     for path in paths {
-                                        let full_path = base_root.join(&path);
-                                        
-                                        // Security check: ensure path is within base_root
-                                        if !full_path.starts_with(&base_root) {
-                                            eprintln!("Security violation: path {} is outside base root", full_path.display());
-                                            error_count += 1;
-                                            continue;
-                                        }
-                                        
-                                        match std::fs::metadata(&full_path) {
-                                            Ok(metadata) => {
-                                                let size = metadata.len();
-                                                total_size += size;
-                                                results.push((path, size));
-                                                println!("File: {}, Size: {} bytes", full_path.display(), size);
+                                        // Use path sanitizer for security
+                                        match path_sanitizer.sanitize_path(&path) {
+                                            Ok(sanitized) => {
+                                                // Additional security validation
+                                                if let Err(e) = path_sanitizer.validate_path_security(&sanitized.local_path) {
+                                                    eprintln!("Security violation: {}", e);
+                                                    error_count += 1;
+                                                    continue;
+                                                }
+                                                
+                                                match std::fs::metadata(&sanitized.local_path) {
+                                                    Ok(metadata) => {
+                                                        let size = metadata.len();
+                                                        total_size += size;
+                                                        results.push((path, size));
+                                                        println!("File: {}, Size: {} bytes", sanitized.local_path.display(), size);
+                                                    }
+                                                    Err(e) => {
+                                                        eprintln!("Failed to get metadata for {}: {}", sanitized.local_path.display(), e);
+                                                        error_count += 1;
+                                                    }
+                                                }
                                             }
                                             Err(e) => {
-                                                eprintln!("Failed to get metadata for {}: {}", full_path.display(), e);
+                                                eprintln!("Path sanitization failed for {}: {}", path, e);
                                                 error_count += 1;
                                             }
                                         }
@@ -227,90 +259,141 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
                                     if error_count == 0 {
                                         // Create size reply with all file sizes
                                         let reply = create_size_reply(&results, total_size);
-                                        (MT_ACK_REPLY, reply)
+                                        (ACK_REPLY, reply)
                                     } else {
-                                        let error_msg = format!("Processed {} files, {} errors", results.len(), error_count);
-                                        let body = encode_nack(-1, error_msg);
-                                        (MT_NACK_REPLY, body)
+                                        let nack = NackReply {
+                                            err_code: ErrorCode::InternalError as i32,
+                                            err_msg: format!("Processed {} files, {} errors", results.len(), error_count),
+                                        };
+                                        (NACK_REPLY, nack.serialize().unwrap_or_default())
                                     }
                                 }
                                 Err(e) => {
-                                    let body = encode_nack(-3, format!("Failed to parse size request: {}", e));
-                                    (MT_NACK_REPLY, body)
+                                    let nack = NackReply {
+                                        err_code: ErrorCode::ParseError as i32,
+                                        err_msg: format!("Failed to parse size request: {}", e),
+                                    };
+                                    (NACK_REPLY, nack.serialize().unwrap_or_default())
                                 }
                             }
                         }
-                        MT_REPO_PATH_CREATE_REQUEST => {
+                        REPO_PATH_CREATE_REQUEST => {
+                            println!("worker[{id}] processing RepoPathCreateRequest, payload len: {}", env.payload.len());
                             // Parse payload to get path and create directory under base_root
                             match parse_path_request(&env.payload) {
                                 Ok(path) => {
-                                    let full_path = base_root.join(&path);
-                                    
-                                    // Security check: ensure path is within base_root
-                                    if !full_path.starts_with(&base_root) {
-                                        let body = encode_nack(-4, format!("Security violation: path {} is outside base root", full_path.display()));
-                                        (MT_NACK_REPLY, body)
-                                    } else {
-                                        // Create directory with -p equivalent (create parent directories)
-                                        match std::fs::create_dir_all(&full_path) {
-                                            Ok(()) => {
-                                                println!("Created directory: {}", full_path.display());
-                                                (MT_ACK_REPLY, Vec::new())
+                                    // Use path sanitizer for security
+                                    match path_sanitizer.sanitize_path(&path) {
+                                        Ok(sanitized) => {
+                                            // Additional security validation
+                                            if let Err(e) = path_sanitizer.validate_path_security(&sanitized.local_path) {
+                                                let nack = NackReply {
+                                                    err_code: ErrorCode::SecurityViolation as i32,
+                                                    err_msg: format!("Security violation: {}", e),
+                                                };
+                                                (NACK_REPLY, nack.serialize().unwrap_or_default())
+                                            } else {
+                                                // Create directory with -p equivalent (create parent directories)
+                                                match std::fs::create_dir_all(&sanitized.local_path) {
+                                                    Ok(()) => {
+                                                        println!("Created directory: {}", sanitized.local_path.display());
+                                                        (ACK_REPLY, Vec::new())
+                                                    }
+                                                    Err(e) => {
+                                                        let nack = NackReply {
+                                                            err_code: ErrorCode::DirectoryCreationError as i32,
+                                                            err_msg: format!("Failed to create directory {}: {}", sanitized.local_path.display(), e),
+                                                        };
+                                                        (NACK_REPLY, nack.serialize().unwrap_or_default())
+                                                    }
+                                                }
                                             }
-                                            Err(e) => {
-                                                let body = encode_nack(-5, format!("Failed to create directory {}: {}", full_path.display(), e));
-                                                (MT_NACK_REPLY, body)
-                                            }
+                                        }
+                                        Err(e) => {
+                                            let nack = NackReply {
+                                                err_code: ErrorCode::SecurityViolation as i32,
+                                                err_msg: format!("Path sanitization failed: {}", e),
+                                            };
+                                            (NACK_REPLY, nack.serialize().unwrap_or_default())
                                         }
                                     }
                                 }
                                 Err(e) => {
-                                    let body = encode_nack(-3, format!("Failed to parse path create request: {}", e));
-                                    (MT_NACK_REPLY, body)
+                                    let nack = NackReply {
+                                        err_code: ErrorCode::ParseError as i32,
+                                        err_msg: format!("Failed to parse path create request: {}", e),
+                                    };
+                                    (NACK_REPLY, nack.serialize().unwrap_or_default())
                                 }
                             }
                         }
-                        MT_REPO_PATH_DELETE_REQUEST => {
+                        REPO_PATH_DELETE_REQUEST => {
                             // Parse payload to get path and recursively delete directory under base_root
                             match parse_path_request(&env.payload) {
                                 Ok(path) => {
-                                    let full_path = base_root.join(&path);
-                                    
-                                    // Security check: ensure path is within base_root
-                                    if !full_path.starts_with(&base_root) {
-                                        let body = encode_nack(-4, format!("Security violation: path {} is outside base root", full_path.display()));
-                                        (MT_NACK_REPLY, body)
-                                    } else if full_path == base_root {
-                                        // Additional security check: prevent deletion of base_root itself
-                                        let body = encode_nack(-6, "Cannot delete base root directory".to_string());
-                                        (MT_NACK_REPLY, body)
-                                    } else {
-                                        // Recursively delete directory (rm -r equivalent)
-                                        match std::fs::remove_dir_all(&full_path) {
-                                            Ok(()) => {
-                                                println!("Deleted directory: {}", full_path.display());
-                                                (MT_ACK_REPLY, Vec::new())
+                                    // Use path sanitizer for security
+                                    match path_sanitizer.sanitize_path(&path) {
+                                        Ok(sanitized) => {
+                                            // Additional security validation
+                                            if let Err(e) = path_sanitizer.validate_path_security(&sanitized.local_path) {
+                                                let nack = NackReply {
+                                                    err_code: ErrorCode::SecurityViolation as i32,
+                                                    err_msg: format!("Security violation: {}", e),
+                                                };
+                                                (NACK_REPLY, nack.serialize().unwrap_or_default())
+                                            } else if sanitized.local_path == base_root {
+                                                // Additional security check: prevent deletion of base_root itself
+                                                let nack = NackReply {
+                                                    err_code: ErrorCode::BaseRootDeletionError as i32,
+                                                    err_msg: "Cannot delete base root directory".to_string(),
+                                                };
+                                                (NACK_REPLY, nack.serialize().unwrap_or_default())
+                                            } else {
+                                                // Recursively delete directory (rm -r equivalent)
+                                                match std::fs::remove_dir_all(&sanitized.local_path) {
+                                                    Ok(()) => {
+                                                        println!("Deleted directory: {}", sanitized.local_path.display());
+                                                        (ACK_REPLY, Vec::new())
+                                                    }
+                                                    Err(e) => {
+                                                        let nack = NackReply {
+                                                            err_code: ErrorCode::DirectoryDeletionError as i32,
+                                                            err_msg: format!("Failed to delete directory {}: {}", sanitized.local_path.display(), e),
+                                                        };
+                                                        (NACK_REPLY, nack.serialize().unwrap_or_default())
+                                                    }
+                                                }
                                             }
-                                            Err(e) => {
-                                                let body = encode_nack(-7, format!("Failed to delete directory {}: {}", full_path.display(), e));
-                                                (MT_NACK_REPLY, body)
-                                            }
+                                        }
+                                        Err(e) => {
+                                            let nack = NackReply {
+                                                err_code: ErrorCode::SecurityViolation as i32,
+                                                err_msg: format!("Path sanitization failed: {}", e),
+                                            };
+                                            (NACK_REPLY, nack.serialize().unwrap_or_default())
                                         }
                                     }
                                 }
                                 Err(e) => {
-                                    let body = encode_nack(-3, format!("Failed to parse path delete request: {}", e));
-                                    (MT_NACK_REPLY, body)
+                                    let nack = NackReply {
+                                        err_code: ErrorCode::ParseError as i32,
+                                        err_msg: format!("Failed to parse path delete request: {}", e),
+                                    };
+                                    (NACK_REPLY, nack.serialize().unwrap_or_default())
                                 }
                             }
                         }
                         _ => {
-                            let body = encode_nack(-2, format!("unsupported msg type {}", env.msg_type));
-                            (MT_NACK_REPLY, body)
+                            let nack = NackReply {
+                                err_code: ErrorCode::BadRequest as i32,
+                                err_msg: format!("Unsupported message type: {}", env.msg_type),
+                            };
+                            (NACK_REPLY, nack.serialize().unwrap_or_default())
                         }
                     };
 
                     // Send reply (preserve correlation id)
+                    println!("worker[{id}] sending reply type: {} (0x{:x})", reply_type, reply_type);
                     let _ = messenger.send(Envelope {
                         correlation_id,
                         msg_type: reply_type,
@@ -332,10 +415,7 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
     })
 }
 
-// simple JSON NACK payload for now (so you can inspect in tests/logs)
-fn encode_nack(code: i32, msg: String) -> Vec<u8> {
-    format!(r#"{{"err_code":{},"err_msg":"{}"}}"#, code, msg.replace('"', "'")).into_bytes()
-}
+// Old encode_nack function removed - now using NackReply struct
 
 /// Parse delete request payload to extract file paths
 /// Expected format: JSON array of strings representing relative paths
@@ -408,43 +488,70 @@ fn parse_size_request(payload: &[u8]) -> Result<Vec<String>, Box<dyn std::error:
 }
 
 /// Parse path request payload to extract a single path
-/// Expected format: JSON string representing a relative path
-/// Example: "subdir/newdir"
+/// The payload appears to be the raw path string, not protobuf-encoded
 fn parse_path_request(payload: &[u8]) -> Result<String, Box<dyn std::error::Error>> {
     if payload.is_empty() {
         return Err("Empty payload".into());
     }
     
-    // Try to parse as JSON string
+    // Debug: print first few bytes of payload
+    let debug_len = std::cmp::min(20, payload.len());
+    let debug_bytes = &payload[..debug_len];
+    println!("parse_path_request: payload first {} bytes: {:?}", debug_len, debug_bytes);
+    
+    // Try to parse as raw UTF-8 string first (most likely case)
+    if let Ok(path_str) = std::str::from_utf8(payload) {
+        let trimmed = path_str.trim();
+        if !trimmed.is_empty() {
+            println!("parse_path_request: extracted path from raw string: '{}'", trimmed);
+            return Ok(trimmed.to_string());
+        }
+    }
+    
+    // Fallback: try to parse as protobuf string field
+    // Field 1 (path) is encoded as: 0x0A <length> <string_bytes>
+    for i in 0..payload.len().saturating_sub(2) {
+        if payload[i] == 0x0A { // Field 1 marker
+            let length = payload[i + 1] as usize;
+            if i + 2 + length <= payload.len() {
+                let path_bytes = &payload[i + 2..i + 2 + length];
+                if let Ok(path_str) = std::str::from_utf8(path_bytes) {
+                    println!("parse_path_request: extracted path from protobuf: '{}'", path_str);
+                    return Ok(path_str.to_string());
+                }
+            }
+        }
+    }
+    
+    // Fallback: try to parse as JSON string
     let payload_str = std::str::from_utf8(payload)
         .map_err(|e| format!("Invalid UTF-8 in payload: {}", e))?;
     
     let trimmed = payload_str.trim();
-    if !trimmed.starts_with('"') || !trimmed.ends_with('"') {
-        return Err("Payload is not a JSON string".into());
-    }
-    
-    // Extract content between quotes, handling escape sequences
-    let content = &trimmed[1..trimmed.len()-1]; // Remove " and "
-    let mut result = String::new();
-    let mut escape_next = false;
-    
-    for ch in content.chars() {
-        if escape_next {
-            result.push(ch);
-            escape_next = false;
-        } else if ch == '\\' {
-            escape_next = true;
-        } else {
-            result.push(ch);
+    if trimmed.starts_with('"') && trimmed.ends_with('"') {
+        // Extract content between quotes, handling escape sequences
+        let content = &trimmed[1..trimmed.len()-1]; // Remove " and "
+        let mut result = String::new();
+        let mut escape_next = false;
+        
+        for ch in content.chars() {
+            if escape_next {
+                result.push(ch);
+                escape_next = false;
+            } else if ch == '\\' {
+                escape_next = true;
+            } else {
+                result.push(ch);
+            }
+        }
+        
+        if !result.is_empty() {
+            println!("parse_path_request: extracted path from JSON: '{}'", result);
+            return Ok(result);
         }
     }
     
-    if result.is_empty() {
-        return Err("Empty path".into());
-    }
-    
-    Ok(result)
+    Err("Could not parse path from any supported format".into())
 }
 
 /// Create a size reply with file sizes and total

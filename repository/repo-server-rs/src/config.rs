@@ -34,6 +34,55 @@ impl Config {
         if !self.cred_dir.ends_with('/') { self.cred_dir.push('/'); }
     }
 
+    /// Validate the configuration for correctness
+    pub fn validate(&self) -> Result<(), String> {
+        // Validate core server address
+        if self.core_server.is_empty() {
+            return Err("Core server address cannot be empty".to_string());
+        }
+        if !self.core_server.starts_with("tcp://") {
+            return Err("Core server address must start with 'tcp://'".to_string());
+        }
+
+        // Validate port
+        if self.port == 0 {
+            return Err("Port cannot be 0".to_string());
+        }
+
+        // Validate timeout
+        if self.timeout == 0 {
+            return Err("Timeout cannot be 0".to_string());
+        }
+
+        // Validate worker threads
+        if self.num_req_worker_threads == 0 {
+            return Err("Number of worker threads cannot be 0".to_string());
+        }
+        if self.num_req_worker_threads > 100 {
+            return Err("Number of worker threads cannot exceed 100".to_string());
+        }
+
+        // Validate credentials directory
+        if self.cred_dir.is_empty() {
+            return Err("Credentials directory cannot be empty".to_string());
+        }
+        if !std::path::Path::new(&self.cred_dir).exists() {
+            return Err(format!("Credentials directory does not exist: {}", self.cred_dir));
+        }
+
+        // Validate globus collection path if provided
+        if let Some(ref path) = self.globus_collection_path {
+            if path.is_empty() {
+                return Err("Globus collection path cannot be empty".to_string());
+            }
+            if !std::path::Path::new(path).exists() {
+                return Err(format!("Globus collection path does not exist: {}", path));
+            }
+        }
+
+        Ok(())
+    }
+
     /// Load the core server's public key from the credentials directory
     pub fn load_core_public_key(&self) -> Result<String, String> {
         let key_path = format!("{}mock-datafed-core-key.pub", self.cred_dir);
@@ -142,8 +191,9 @@ impl Config {
         let (public_key, secret_key) = gen_keypair();
         
         // Convert to base64 strings (ZMQ curve format)
-        let pub_key_str = base64::encode(public_key.0);
-        let priv_key_str = base64::encode(secret_key.0);
+        use base64::{Engine as _, engine::general_purpose};
+        let pub_key_str = general_purpose::STANDARD.encode(public_key.0);
+        let priv_key_str = general_purpose::STANDARD.encode(secret_key.0);
         
         Ok((pub_key_str, priv_key_str))
     }

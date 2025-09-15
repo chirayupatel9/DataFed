@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::version::{SharedCoreVersionInfo, fetch_core_server_version, create_shared_version_info};
 use crate::worker::{self, ZMQInprocMessenger};
+use crate::metrics::MetricsCollector;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -13,6 +14,8 @@ pub struct RepoServer {
     running: Arc<AtomicBool>,
     workers: Vec<JoinHandle<()>>,
     version_info: SharedCoreVersionInfo,
+    metrics: MetricsCollector,
+    shutdown_signal: Arc<AtomicBool>,
 }
 
 impl RepoServer {
@@ -22,6 +25,8 @@ impl RepoServer {
             running: Arc::new(AtomicBool::new(false)),
             workers: Vec::new(),
             version_info: create_shared_version_info(),
+            metrics: MetricsCollector::new(),
+            shutdown_signal: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -75,7 +80,15 @@ impl RepoServer {
 
         // D) Block until shutdown (proxy blocks here in real code)
         println!("Server entering main loop, waiting for shutdown signal...");
-        while self.running.load(Ordering::Relaxed) {
+        self.setup_signal_handlers();
+        
+        while self.running.load(Ordering::Relaxed) && !self.shutdown_signal.load(Ordering::Relaxed) {
+            // Check health periodically
+            let health = self.metrics.health_check();
+            if !health.is_healthy {
+                println!("Health check failed: {:?}", health.issues);
+            }
+            
             thread::sleep(Duration::from_millis(100));
         }
         println!("Server received shutdown signal, stopping workers...");
@@ -89,7 +102,49 @@ impl RepoServer {
     }
 
     pub fn stop(&self) {
+        println!("Initiating graceful shutdown...");
         self.running.store(false, Ordering::SeqCst);
+        self.shutdown_signal.store(true, Ordering::SeqCst);
+    }
+
+    pub fn graceful_shutdown(&mut self) {
+        println!("Starting graceful shutdown sequence...");
+        
+        // 1. Stop accepting new connections
+        self.running.store(false, Ordering::SeqCst);
+        
+        // 2. Wait for workers to finish current operations (with timeout)
+        let shutdown_timeout = Duration::from_secs(30);
+        let start_time = std::time::Instant::now();
+        
+        while start_time.elapsed() < shutdown_timeout && !self.workers.is_empty() {
+            // Check if any workers are still running
+            let active_workers: usize = self.workers.iter()
+                .map(|h| if h.is_finished() { 0 } else { 1 })
+                .sum();
+            
+            if active_workers == 0 {
+                break;
+            }
+            
+            println!("Waiting for {} workers to finish...", active_workers);
+            thread::sleep(Duration::from_millis(100));
+        }
+        
+        // 3. Force stop remaining workers if timeout exceeded
+        if !self.workers.is_empty() {
+            println!("Timeout exceeded, forcing worker shutdown...");
+        }
+        
+        // 4. Stop ZMQ proxy
+        if let Err(e) = crate::ffi::repo::server_stop() {
+            eprintln!("Warning: Failed to stop ZMQ proxy: {}", e);
+        }
+        
+        // 5. Print final metrics
+        println!("Final metrics:\n{}", self.metrics.get_metrics_summary());
+        
+        println!("Graceful shutdown completed");
     }
 
     pub fn join(self) {
@@ -99,6 +154,30 @@ impl RepoServer {
     }
 
     pub fn cfg(&self) -> &Config { &self.cfg }
+
+    fn setup_signal_handlers(&self) {
+        let shutdown_signal = self.shutdown_signal.clone();
+        let running = self.running.clone();
+        
+        // Set up Ctrl+C handler
+        ctrlc::set_handler(move || {
+            println!("\nReceived Ctrl+C, initiating graceful shutdown...");
+            running.store(false, Ordering::SeqCst);
+            shutdown_signal.store(true, Ordering::SeqCst);
+        }).expect("Error setting Ctrl+C handler");
+        
+        // Set up SIGTERM handler (if available)
+        #[cfg(unix)]
+        {
+            use std::sync::Once;
+            static ONCE: Once = Once::new();
+            ONCE.call_once(|| {
+                unsafe {
+                    libc::signal(libc::SIGTERM, libc::SIG_DFL);
+                }
+            });
+        }
+    }
 
     fn core_handshake(&self) -> Result<(), String> {
         // Use the new version management system to connect to core server

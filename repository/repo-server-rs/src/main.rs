@@ -1,9 +1,19 @@
 // at the top:
+mod benchmark;
 mod config;
+mod error_handling;
 mod ffi;
+mod message;
+mod metrics;
+mod path_utils;
+mod proto;
 mod server;
 mod version;
 mod worker;
+
+// Include tests module
+#[cfg(test)]
+mod tests;
 
 use crate::config::Config;
 use crate::server::RepoServer;
@@ -21,10 +31,8 @@ fn print_usage() {
 }
 
 fn main() {
-    unsafe {
-        // Add stderr stream via your C++ logger wrapper (exists per your headers)
-        ffi::dynalog::sdms_add_stderr_stream();
-    }
+    // Add stderr stream via your C++ logger wrapper (exists per your headers)
+    ffi::dynalog::sdms_add_stderr_stream();
 
     let args: Vec<String> = env::args().collect();
     
@@ -133,6 +141,13 @@ fn main() {
             default_cfg
         }
     };
+
+    // Validate configuration
+    if let Err(e) = cfg.validate() {
+        eprintln!("Configuration validation failed: {}", e);
+        eprintln!("Please fix the configuration and try again");
+        return;
+    }
     
     println!("Config: core_server={}, cred_dir={}, port={}", cfg.core_server, cfg.cred_dir, cfg.port);
     let mut srv = RepoServer::new(cfg);

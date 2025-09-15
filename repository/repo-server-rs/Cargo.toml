@@ -18,6 +18,13 @@ serde = { version = "1", features = ["derive"] }
 toml  = "0.8"
 sodiumoxide = "0.2.7"
 base64 = "0.21"
+prost = "0.12"
+prost-types = "0.12"
+bytes = "1.5"
+thiserror = "1.0"
+tempfile = "3.8"
+libc = "0.2"
 
 [build-dependencies]
 cxx-build = "1"
+prost-build = "0.12"
