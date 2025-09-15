@@ -140,14 +140,26 @@ impl PathSanitizer {
 
     /// Validate that a path is within the base root (security check)
     pub fn validate_path_security(&self, path: &Path) -> Result<(), PathError> {
-        let canonical_base = self.globus_collection_path.canonicalize()
-            .map_err(|_| PathError::InvalidPath("Cannot canonicalize base path".to_string()))?;
+        // Get the base path as a string for comparison
+        let base_path_str = self.globus_collection_path.to_string_lossy();
         
-        let canonical_path = path.canonicalize()
-            .map_err(|_| PathError::InvalidPath("Cannot canonicalize target path".to_string()))?;
+        // Convert the target path to string for comparison
+        let target_path_str = path.to_string_lossy();
+        
+        // Check if the target path starts with the base path
+        if !target_path_str.starts_with(&*base_path_str) {
+            return Err(PathError::SecurityViolation(format!(
+                "Path '{}' is not within base path '{}'", 
+                target_path_str, base_path_str
+            )));
+        }
 
-        if !canonical_path.starts_with(&canonical_base) {
-            return Err(PathError::SecurityViolation(path.to_string_lossy().to_string()));
+        // Additional check: ensure the path doesn't contain ".." or other dangerous patterns
+        if target_path_str.contains("..") || target_path_str.contains("//") {
+            return Err(PathError::SecurityViolation(format!(
+                "Path '{}' contains dangerous patterns", 
+                target_path_str
+            )));
         }
 
         Ok(())

@@ -20,6 +20,7 @@
 #include "common/Util.hpp"
 #include "common/SDMS.pb.h"
 #include "common/SDMS_Anon.pb.h"
+#include "common/SDMS_Auth.pb.h"
 #include "common/KeyGenerator.hpp"
 #include "common/ServerFactory.hpp"
 #include "common/IServer.hpp"
@@ -319,10 +320,46 @@ rust::Vec<std::uint8_t> zmq_recv(std::int32_t timeout_ms) {
       throw std::runtime_error(std::string("ZMQ recv error: ") + resp.error_msg);
     }
     
-    // Extract payload as bytes
+    // Extract payload first
     auto payload = std::get<google::protobuf::Message*>(resp.message->getPayload());
     if (!payload) {
       return rust::Vec<std::uint8_t>(); // No payload - return empty vector
+    }
+    
+    // Extract message attributes
+    std::string correlation_id;
+    auto corr_id_variant = resp.message->get(MessageAttribute::CORRELATION_ID);
+    if (std::holds_alternative<std::string>(corr_id_variant)) {
+      correlation_id = std::get<std::string>(corr_id_variant);
+    }
+    
+    // Get message type from the protobuf message descriptor
+    uint16_t msg_type = 0;
+    try {
+      // Get the message type from the protobuf message descriptor
+      // This is a simplified approach - in practice you'd need to map descriptor names to message type numbers
+      const std::string& descriptor_name = payload->GetDescriptor()->name();
+      
+      // Map common message types to their numeric values (matching Python client)
+      if (descriptor_name == "VersionRequest") {
+        msg_type = 258; // VERSION_REQUEST (from Python _msg_name_to_type)
+      } else if (descriptor_name == "VersionReply") {
+        msg_type = 259; // VERSION_REPLY (from Python _msg_name_to_type)
+      } else if (descriptor_name == "RepoPathCreateRequest") {
+        msg_type = 594; // REPO_PATH_CREATE_REQUEST (from Python _msg_name_to_type)
+      } else if (descriptor_name == "RepoPathDeleteRequest") {
+        msg_type = 595; // REPO_PATH_DELETE_REQUEST (from Python _msg_name_to_type)
+      } else if (descriptor_name == "RepoDataDeleteRequest") {
+        msg_type = 591; // REPO_DATA_DELETE_REQUEST (from Python _msg_name_to_type)
+      } else if (descriptor_name == "RepoDataGetSizeRequest") {
+        msg_type = 592; // REPO_DATA_GET_SIZE_REQUEST (from Python _msg_name_to_type)
+      } else {
+        std::cerr << "Warning: Unknown message type: " << descriptor_name << std::endl;
+        msg_type = 0;
+      }
+    } catch (const std::exception& e) {
+      std::cerr << "Warning: Could not get message type: " << e.what() << std::endl;
+      msg_type = 0;
     }
     
     // Serialize the protobuf message to bytes
@@ -331,12 +368,19 @@ rust::Vec<std::uint8_t> zmq_recv(std::int32_t timeout_ms) {
       throw std::runtime_error("Failed to serialize protobuf message");
     }
     
-    // Convert std::vector to rust::Vec
+    // Create result with message type + payload format expected by Rust worker
     rust::Vec<std::uint8_t> result;
-    result.reserve(serialized.size());
+    result.reserve(2 + serialized.size()); // 2 bytes for msg_type + payload
+    
+    // Add message type (2 bytes, little-endian)
+    result.push_back(static_cast<uint8_t>(msg_type & 0xFF));
+    result.push_back(static_cast<uint8_t>((msg_type >> 8) & 0xFF));
+    
+    // Add serialized payload
     for (unsigned char c : serialized) {
       result.push_back(c);
     }
+    
     return result;
     
   } catch (const std::exception& e) {
@@ -344,7 +388,7 @@ rust::Vec<std::uint8_t> zmq_recv(std::int32_t timeout_ms) {
   }
 }
 
-void zmq_send(rust::Slice<const std::uint8_t> payload, std::uint16_t _msg_type, rust::Str correlation_id) {
+void zmq_send(rust::Slice<const std::uint8_t> payload, std::uint16_t msg_type, rust::Str correlation_id) {
   try {
     // Create a new communicator for each call to avoid race conditions
     LogContext log_ctx;
@@ -372,24 +416,51 @@ void zmq_send(rust::Slice<const std::uint8_t> payload, std::uint16_t _msg_type, 
     const std::string payload_str(reinterpret_cast<const char*>(payload.data()), payload.size());
     const std::string corr_id(correlation_id);
     
-    // Create a simple message envelope
-    // Note: This is a simplified implementation - in practice you'd want to use
-    // the proper SDMS message factory and envelope structure
+    // Create message envelope
     MessageFactory msg_factory;
     auto envelope = msg_factory.create(MessageType::GOOGLE_PROTOCOL_BUFFER);
     
     // Set message attributes
     envelope->set(MessageAttribute::CORRELATION_ID, corr_id);
     
-    // For now, we'll create a simple message with the payload
-    // In a real implementation, you'd parse the payload and create the appropriate message type
-    // Since we can't easily use google::protobuf::Any, we'll use a simple approach
-    // Create a basic message and set the payload directly
-    auto msg = std::make_unique<SDMS::Anon::VersionRequest>(); // Use any available message type as placeholder
+    // Create the appropriate message type based on msg_type
+    std::unique_ptr<google::protobuf::Message> msg;
+    
+    switch (msg_type) {
+      case 2: // VERSION_REPLY
+        msg = std::make_unique<SDMS::Anon::VersionReply>();
+        break;
+      case 1100: // ACK_REPLY
+        msg = std::make_unique<SDMS::Anon::AckReply>();
+        break;
+      case 9999: // NACK_REPLY
+        msg = std::make_unique<SDMS::Anon::NackReply>();
+        break;
+      case 13323: // REPO_DATA_SIZE_REPLY
+        msg = std::make_unique<SDMS::Auth::RepoDataSizeReply>();
+        break;
+      default:
+        // For unknown message types, create a generic message
+        msg = std::make_unique<SDMS::Anon::AckReply>();
+        break;
+    }
+    
+    // Parse the payload into the message if it's not empty
+    if (!payload_str.empty() && msg) {
+      // Try to parse the payload into the message
+      if (!msg->ParseFromString(payload_str)) {
+        std::cerr << "Warning: Failed to parse payload for message type " << msg_type << std::endl;
+        // Create a default message if parsing fails
+        msg = std::make_unique<SDMS::Anon::AckReply>();
+      }
+    }
+    
     envelope->setPayload(std::move(msg));
     
     // Send the message
+    std::cout << "C++ zmq_send: Sending message type " << msg_type << " with correlation_id " << corr_id << " and payload size " << payload_str.size() << std::endl;
     communicator->send(*envelope);
+    std::cout << "C++ zmq_send: Message sent successfully" << std::endl;
     
   } catch (const std::exception& e) {
     throw std::runtime_error(std::string("ZMQ send failed: ") + e.what());

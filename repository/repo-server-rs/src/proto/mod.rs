@@ -91,6 +91,22 @@ mod fallback {
     }
 
     impl VersionReply {
+        pub fn new() -> Self {
+            Self {
+                release_year: 2025,
+                release_month: 6,
+                release_day: 11,
+                release_hour: 14,
+                release_minute: 1,
+                api_major: 1,
+                api_minor: 1,
+                api_patch: 0,
+                component_major: 1,
+                component_minor: 0,
+                component_patch: 0,
+            }
+        }
+
         pub fn serialize(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
             let mut data = Vec::new();
             data.extend_from_slice(&self.release_year.to_le_bytes());
@@ -165,41 +181,139 @@ mod fallback {
         }
 
         pub fn deserialize(data: &[u8]) -> Result<RepoDataDeleteRequest, Box<dyn std::error::Error>> {
-            if data.len() < 4 {
-                return Err("RepoDataDeleteRequest data too short".into());
-            }
-            
-            let mut offset = 0;
-            let count = u32::from_le_bytes([data[offset], data[offset+1], data[offset+2], data[offset+3]]) as usize;
-            offset += 4;
-            
+            // Parse protobuf format for RepoDataDeleteRequest
+            // Field 1: repeated RecordDataLocation loc
             let mut loc = Vec::new();
-            for _ in 0..count {
-                if offset + 4 > data.len() {
-                    return Err("Invalid RepoDataDeleteRequest data".into());
+            let mut offset = 0;
+            
+            while offset < data.len() {
+                if offset >= data.len() {
+                    break;
                 }
-                let id_len = u32::from_le_bytes([data[offset], data[offset+1], data[offset+2], data[offset+3]]) as usize;
-                offset += 4;
                 
-                if offset + id_len > data.len() {
-                    return Err("Invalid RepoDataDeleteRequest data".into());
+                // Read field tag and wire type
+                let tag_byte = data[offset];
+                offset += 1;
+                
+                if tag_byte == 0x0A { // Field 1, wire type 2 (length-delimited)
+                    // Read length
+                    let mut length = 0u32;
+                    let mut shift = 0;
+                    loop {
+                        if offset >= data.len() {
+                            return Err("Invalid protobuf data".into());
+                        }
+                        let byte = data[offset];
+                        offset += 1;
+                        length |= ((byte & 0x7F) as u32) << shift;
+                        if (byte & 0x80) == 0 {
+                            break;
+                        }
+                        shift += 7;
+                    }
+                    
+                    // Parse RecordDataLocation
+                    if offset + length as usize > data.len() {
+                        return Err("Invalid protobuf data".into());
+                    }
+                    
+                    let location_data = &data[offset..offset + length as usize];
+                    offset += length as usize;
+                    
+                    // Parse RecordDataLocation fields
+                    let mut id = String::new();
+                    let mut path = String::new();
+                    let mut loc_offset = 0;
+                    
+                    while loc_offset < location_data.len() {
+                        if loc_offset >= location_data.len() {
+                            break;
+                        }
+                        
+                        let loc_tag_byte = location_data[loc_offset];
+                        loc_offset += 1;
+                        
+                        if loc_tag_byte == 0x0A { // Field 1: id
+                            let mut id_len = 0u32;
+                            let mut id_shift = 0;
+                            loop {
+                                if loc_offset >= location_data.len() {
+                                    return Err("Invalid protobuf data".into());
+                                }
+                                let byte = location_data[loc_offset];
+                                loc_offset += 1;
+                                id_len |= ((byte & 0x7F) as u32) << id_shift;
+                                if (byte & 0x80) == 0 {
+                                    break;
+                                }
+                                id_shift += 7;
+                            }
+                            
+                            if loc_offset + id_len as usize > location_data.len() {
+                                return Err("Invalid protobuf data".into());
+                            }
+                            id = String::from_utf8(location_data[loc_offset..loc_offset + id_len as usize].to_vec())?;
+                            loc_offset += id_len as usize;
+                        } else if loc_tag_byte == 0x12 { // Field 2: path
+                            let mut path_len = 0u32;
+                            let mut path_shift = 0;
+                            loop {
+                                if loc_offset >= location_data.len() {
+                                    return Err("Invalid protobuf data".into());
+                                }
+                                let byte = location_data[loc_offset];
+                                loc_offset += 1;
+                                path_len |= ((byte & 0x7F) as u32) << path_shift;
+                                if (byte & 0x80) == 0 {
+                                    break;
+                                }
+                                path_shift += 7;
+                            }
+                            
+                            if loc_offset + path_len as usize > location_data.len() {
+                                return Err("Invalid protobuf data".into());
+                            }
+                            path = String::from_utf8(location_data[loc_offset..loc_offset + path_len as usize].to_vec())?;
+                            loc_offset += path_len as usize;
+                        } else {
+                            // Skip unknown field
+                            let mut skip_len = 0u32;
+                            let mut skip_shift = 0;
+                            loop {
+                                if loc_offset >= location_data.len() {
+                                    return Err("Invalid protobuf data".into());
+                                }
+                                let byte = location_data[loc_offset];
+                                loc_offset += 1;
+                                skip_len |= ((byte & 0x7F) as u32) << skip_shift;
+                                if (byte & 0x80) == 0 {
+                                    break;
+                                }
+                                skip_shift += 7;
+                            }
+                            loc_offset += skip_len as usize;
+                        }
+                    }
+                    
+                    loc.push(RecordDataLocation { id, path });
+                } else {
+                    // Skip unknown field
+                    let mut skip_len = 0u32;
+                    let mut skip_shift = 0;
+                    loop {
+                        if offset >= data.len() {
+                            return Err("Invalid protobuf data".into());
+                        }
+                        let byte = data[offset];
+                        offset += 1;
+                        skip_len |= ((byte & 0x7F) as u32) << skip_shift;
+                        if (byte & 0x80) == 0 {
+                            break;
+                        }
+                        skip_shift += 7;
+                    }
+                    offset += skip_len as usize;
                 }
-                let id = String::from_utf8(data[offset..offset+id_len].to_vec())?;
-                offset += id_len;
-                
-                if offset + 4 > data.len() {
-                    return Err("Invalid RepoDataDeleteRequest data".into());
-                }
-                let path_len = u32::from_le_bytes([data[offset], data[offset+1], data[offset+2], data[offset+3]]) as usize;
-                offset += 4;
-                
-                if offset + path_len > data.len() {
-                    return Err("Invalid RepoDataDeleteRequest data".into());
-                }
-                let path = String::from_utf8(data[offset..offset+path_len].to_vec())?;
-                offset += path_len;
-                
-                loc.push(RecordDataLocation { id, path });
             }
             
             Ok(RepoDataDeleteRequest { loc })
@@ -220,41 +334,139 @@ mod fallback {
         }
 
         pub fn deserialize(data: &[u8]) -> Result<RepoDataGetSizeRequest, Box<dyn std::error::Error>> {
-            if data.len() < 4 {
-                return Err("RepoDataGetSizeRequest data too short".into());
-            }
-            
-            let mut offset = 0;
-            let count = u32::from_le_bytes([data[offset], data[offset+1], data[offset+2], data[offset+3]]) as usize;
-            offset += 4;
-            
+            // Parse protobuf format for RepoDataGetSizeRequest
+            // Field 1: repeated RecordDataLocation loc
             let mut loc = Vec::new();
-            for _ in 0..count {
-                if offset + 4 > data.len() {
-                    return Err("Invalid RepoDataGetSizeRequest data".into());
+            let mut offset = 0;
+            
+            while offset < data.len() {
+                if offset >= data.len() {
+                    break;
                 }
-                let id_len = u32::from_le_bytes([data[offset], data[offset+1], data[offset+2], data[offset+3]]) as usize;
-                offset += 4;
                 
-                if offset + id_len > data.len() {
-                    return Err("Invalid RepoDataGetSizeRequest data".into());
+                // Read field tag and wire type
+                let tag_byte = data[offset];
+                offset += 1;
+                
+                if tag_byte == 0x0A { // Field 1, wire type 2 (length-delimited)
+                    // Read length
+                    let mut length = 0u32;
+                    let mut shift = 0;
+                    loop {
+                        if offset >= data.len() {
+                            return Err("Invalid protobuf data".into());
+                        }
+                        let byte = data[offset];
+                        offset += 1;
+                        length |= ((byte & 0x7F) as u32) << shift;
+                        if (byte & 0x80) == 0 {
+                            break;
+                        }
+                        shift += 7;
+                    }
+                    
+                    // Parse RecordDataLocation
+                    if offset + length as usize > data.len() {
+                        return Err("Invalid protobuf data".into());
+                    }
+                    
+                    let location_data = &data[offset..offset + length as usize];
+                    offset += length as usize;
+                    
+                    // Parse RecordDataLocation fields
+                    let mut id = String::new();
+                    let mut path = String::new();
+                    let mut loc_offset = 0;
+                    
+                    while loc_offset < location_data.len() {
+                        if loc_offset >= location_data.len() {
+                            break;
+                        }
+                        
+                        let loc_tag_byte = location_data[loc_offset];
+                        loc_offset += 1;
+                        
+                        if loc_tag_byte == 0x0A { // Field 1: id
+                            let mut id_len = 0u32;
+                            let mut id_shift = 0;
+                            loop {
+                                if loc_offset >= location_data.len() {
+                                    return Err("Invalid protobuf data".into());
+                                }
+                                let byte = location_data[loc_offset];
+                                loc_offset += 1;
+                                id_len |= ((byte & 0x7F) as u32) << id_shift;
+                                if (byte & 0x80) == 0 {
+                                    break;
+                                }
+                                id_shift += 7;
+                            }
+                            
+                            if loc_offset + id_len as usize > location_data.len() {
+                                return Err("Invalid protobuf data".into());
+                            }
+                            id = String::from_utf8(location_data[loc_offset..loc_offset + id_len as usize].to_vec())?;
+                            loc_offset += id_len as usize;
+                        } else if loc_tag_byte == 0x12 { // Field 2: path
+                            let mut path_len = 0u32;
+                            let mut path_shift = 0;
+                            loop {
+                                if loc_offset >= location_data.len() {
+                                    return Err("Invalid protobuf data".into());
+                                }
+                                let byte = location_data[loc_offset];
+                                loc_offset += 1;
+                                path_len |= ((byte & 0x7F) as u32) << path_shift;
+                                if (byte & 0x80) == 0 {
+                                    break;
+                                }
+                                path_shift += 7;
+                            }
+                            
+                            if loc_offset + path_len as usize > location_data.len() {
+                                return Err("Invalid protobuf data".into());
+                            }
+                            path = String::from_utf8(location_data[loc_offset..loc_offset + path_len as usize].to_vec())?;
+                            loc_offset += path_len as usize;
+                        } else {
+                            // Skip unknown field
+                            let mut skip_len = 0u32;
+                            let mut skip_shift = 0;
+                            loop {
+                                if loc_offset >= location_data.len() {
+                                    return Err("Invalid protobuf data".into());
+                                }
+                                let byte = location_data[loc_offset];
+                                loc_offset += 1;
+                                skip_len |= ((byte & 0x7F) as u32) << skip_shift;
+                                if (byte & 0x80) == 0 {
+                                    break;
+                                }
+                                skip_shift += 7;
+                            }
+                            loc_offset += skip_len as usize;
+                        }
+                    }
+                    
+                    loc.push(RecordDataLocation { id, path });
+                } else {
+                    // Skip unknown field
+                    let mut skip_len = 0u32;
+                    let mut skip_shift = 0;
+                    loop {
+                        if offset >= data.len() {
+                            return Err("Invalid protobuf data".into());
+                        }
+                        let byte = data[offset];
+                        offset += 1;
+                        skip_len |= ((byte & 0x7F) as u32) << skip_shift;
+                        if (byte & 0x80) == 0 {
+                            break;
+                        }
+                        skip_shift += 7;
+                    }
+                    offset += skip_len as usize;
                 }
-                let id = String::from_utf8(data[offset..offset+id_len].to_vec())?;
-                offset += id_len;
-                
-                if offset + 4 > data.len() {
-                    return Err("Invalid RepoDataGetSizeRequest data".into());
-                }
-                let path_len = u32::from_le_bytes([data[offset], data[offset+1], data[offset+2], data[offset+3]]) as usize;
-                offset += 4;
-                
-                if offset + path_len > data.len() {
-                    return Err("Invalid RepoDataGetSizeRequest data".into());
-                }
-                let path = String::from_utf8(data[offset..offset+path_len].to_vec())?;
-                offset += path_len;
-                
-                loc.push(RecordDataLocation { id, path });
             }
             
             Ok(RepoDataGetSizeRequest { loc })

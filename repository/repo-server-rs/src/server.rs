@@ -77,6 +77,9 @@ impl RepoServer {
             self.workers.push(h);
             println!("Worker {} spawned successfully", i);
         }
+        
+        // Update metrics with the actual number of worker threads
+        self.metrics.set_worker_threads_active(self.cfg.num_req_worker_threads as u32);
 
         // D) Block until shutdown (proxy blocks here in real code)
         println!("Server entering main loop, waiting for shutdown signal...");
@@ -112,6 +115,9 @@ impl RepoServer {
         
         // 1. Stop accepting new connections
         self.running.store(false, Ordering::SeqCst);
+        
+        // Reset worker thread count
+        self.metrics.set_worker_threads_active(0);
         
         // 2. Wait for workers to finish current operations (with timeout)
         let shutdown_timeout = Duration::from_secs(30);

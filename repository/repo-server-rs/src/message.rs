@@ -188,20 +188,20 @@ impl MessageFactory {
     }
 }
 
-/// Message type constants - equivalent to C++ message type constants
+/// Message type constants - matching Python client message types
 pub mod message_types {
-    // Anonymous protocol messages
-    pub const VERSION_REQUEST: u16 = 1;
+    // Anonymous protocol messages (from Python _msg_name_to_type)
+    pub const VERSION_REQUEST: u16 = 258;
     pub const VERSION_REPLY: u16 = 2;
     pub const ACK_REPLY: u16 = 1100;
     pub const NACK_REPLY: u16 = 9999;
 
-    // Authorized protocol messages  
-    pub const REPO_DATA_DELETE_REQUEST: u16 = 17930; // 0x460a
-    pub const REPO_DATA_GET_SIZE_REQUEST: u16 = 13322; // 0x340a
-    pub const REPO_PATH_CREATE_REQUEST: u16 = 13578; // 0x350a
-    pub const REPO_PATH_DELETE_REQUEST: u16 = 1004;
-    pub const REPO_DATA_SIZE_REPLY: u16 = 13323; // 0x340b
+    // Authorized protocol messages (from Python _msg_name_to_type)
+    pub const REPO_DATA_DELETE_REQUEST: u16 = 591;
+    pub const REPO_DATA_GET_SIZE_REQUEST: u16 = 592;
+    pub const REPO_PATH_CREATE_REQUEST: u16 = 594;
+    pub const REPO_PATH_DELETE_REQUEST: u16 = 595;
+    pub const REPO_DATA_SIZE_REPLY: u16 = 13323; // Match C++ bridge expectations
 }
 
 /// NackReply message - equivalent to C++ NackReply
@@ -217,11 +217,43 @@ impl NackReply {
     }
 
     pub fn serialize(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-        // Simple JSON serialization for now
-        let json = format!(r#"{{"err_code":{},"err_msg":"{}"}}"#, 
-                          self.err_code, 
-                          self.err_msg.replace('"', "\\\""));
-        Ok(json.into_bytes())
+        // Protobuf serialization for NackReply
+        // Field 1: err_code (varint) - tag 0x08 (field 1, wire type 0)
+        // Field 2: err_msg (string) - tag 0x12 (field 2, wire type 2)
+        let mut data = Vec::new();
+        
+        // Field 1: err_code (varint encoding with zigzag for negative numbers)
+        data.push(0x08); // Field 1, wire type 0 (varint)
+        
+        // Convert to zigzag encoding for negative numbers
+        let zigzag_code = ((self.err_code << 1) ^ (self.err_code >> 31)) as u32;
+        let mut code = zigzag_code as u64;
+        while code >= 0x80 {
+            data.push((code as u8) | 0x80);
+            code >>= 7;
+        }
+        data.push(code as u8);
+        
+        // Field 2: err_msg (string encoding)
+        if !self.err_msg.is_empty() {
+            let msg_bytes = self.err_msg.as_bytes();
+            data.push(0x12); // Field 2, wire type 2 (string)
+            
+            // Encode length as varint
+            let mut len = msg_bytes.len() as u64;
+            while len >= 0x80 {
+                data.push((len as u8) | 0x80);
+                len >>= 7;
+            }
+            data.push(len as u8);
+            
+            data.extend_from_slice(msg_bytes);
+        }
+        
+        // Debug: print the serialized data
+        println!("NackReply::serialize: err_code={}, err_msg='{}', serialized_len={}, data={:?}", 
+                 self.err_code, self.err_msg, data.len(), data);
+        Ok(data)
     }
 
     pub fn deserialize(data: &[u8]) -> Result<NackReply, Box<dyn std::error::Error>> {

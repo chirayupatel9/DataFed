@@ -109,25 +109,26 @@ impl VersionReply {
 }
 
 use crate::config::Config;
+use crate::proto::VersionReply as ProtoVersionReply;
 
 // ===== Core Server Version Management =====
 use std::sync::{Arc, RwLock};
 
 #[derive(Debug, Clone)]
 pub struct CoreVersionInfo {
-    pub version_reply: VersionReply,
+    pub version_reply: ProtoVersionReply,
     pub is_connected: bool,
 }
 
 impl CoreVersionInfo {
     pub fn new() -> Self {
         Self {
-            version_reply: VersionReply::new(),
+            version_reply: ProtoVersionReply::new(),
             is_connected: false,
         }
     }
 
-    pub fn update_from_core(&mut self, version_reply: VersionReply) {
+    pub fn update_from_core(&mut self, version_reply: ProtoVersionReply) {
         self.version_reply = version_reply;
         self.is_connected = true;
     }
@@ -162,20 +163,20 @@ pub fn fetch_core_server_version(
     
     match crate::ffi::repo::send_version_request(host, port, scheme, &core_public_key, 20000) {
         Ok(version_info_cpp) => {
-            // Convert the C++ VersionInfo to our VersionReply
-            let core_version = VersionReply::from_core_server(
-                version_info_cpp.release_year,
-                version_info_cpp.release_month,
-                version_info_cpp.release_day,
-                version_info_cpp.release_hour,
-                version_info_cpp.release_minute,
-                version_info_cpp.api_major,
-                version_info_cpp.api_minor,
-                version_info_cpp.api_patch,
-                version_info_cpp.component_major,
-                version_info_cpp.component_minor,
-                version_info_cpp.component_patch,
-            );
+            // Convert the C++ VersionInfo to our ProtoVersionReply
+            let core_version = ProtoVersionReply {
+                release_year: version_info_cpp.release_year,
+                release_month: version_info_cpp.release_month,
+                release_day: version_info_cpp.release_day,
+                release_hour: version_info_cpp.release_hour,
+                release_minute: version_info_cpp.release_minute,
+                api_major: version_info_cpp.api_major,
+                api_minor: version_info_cpp.api_minor,
+                api_patch: version_info_cpp.api_patch,
+                component_major: version_info_cpp.component_major,
+                component_minor: version_info_cpp.component_minor,
+                component_patch: version_info_cpp.component_patch,
+            };
             
             // Validate API compatibility
             if core_version.api_major != DATAFED_COMMON_PROTOCOL_API_MAJOR {

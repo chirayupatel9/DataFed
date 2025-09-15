@@ -6,12 +6,15 @@ use std::{
     time::Duration,
 };
 
-use crate::version::{VersionReply, SharedCoreVersionInfo};
+use crate::version::SharedCoreVersionInfo;
+use crate::proto::VersionReply;
 use crate::ffi::repo::*;
 use crate::message::*;
 use crate::path_utils::*;
 use crate::ffi::dynalog::{LogCtx, level};
 use crate::{dl_info, dl_log};
+use crate::proto::{RepoDataSizeReply, RecordDataSize};
+use crate::message::{NackReply, AckReply, ErrorCode};
 
 // ===== Envelope + Transport (kept minimal so it works today) =====
 #[derive(Debug, Clone)]
@@ -68,6 +71,10 @@ impl Messenger for ZMQInprocMessenger {
                 
                 // The rest is the actual payload
                 let message_payload = payload[2..].to_vec();
+                
+                // Debug logging
+                println!("Worker {} received message: type={} (0x{:x}), payload_len={}", 
+                         self.worker_id, msg_type, msg_type, message_payload.len());
                 
                 Ok(Some(Envelope {
                     correlation_id,
@@ -156,7 +163,18 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
                                 }
                             };
                             dl_info!(msg_ctx, "Version reply: {}.{}.{}", version_reply.component_major, version_reply.component_minor, version_reply.component_patch);
-                            (VERSION_REPLY, version_reply.to_bytes())
+                            // Use protobuf serialization instead of custom binary format
+                            match version_reply.serialize() {
+                                Ok(payload) => (VERSION_REPLY, payload),
+                                Err(e) => {
+                                    dl_log!(level::ERROR, msg_ctx, "Failed to serialize version reply: {}", e);
+                                    let nack = NackReply {
+                                        err_code: ErrorCode::InternalError as i32,
+                                        err_msg: format!("Serialization error: {}", e),
+                                    };
+                                    (NACK_REPLY, nack.serialize().unwrap_or_default())
+                                }
+                            }
                         }
                         REPO_DATA_DELETE_REQUEST => {
                             dl_info!(msg_ctx, "Processing data delete request");
@@ -199,13 +217,27 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
                                     }
                                     
                                     if error_count == 0 {
-                                        (ACK_REPLY, Vec::new())
+                                        // Create empty AckReply
+                                        let ack = AckReply;
+                                        match ack.serialize() {
+                                            Ok(payload) => (ACK_REPLY, payload),
+                                            Err(e) => {
+                                                dl_log!(level::ERROR, msg_ctx, "Failed to serialize AckReply: {}", e);
+                                                (ACK_REPLY, Vec::new()) // Fallback to empty payload
+                                            }
+                                        }
                                     } else {
                                         let nack = NackReply {
                                             err_code: ErrorCode::InternalError as i32,
                                             err_msg: format!("Deleted {} files, {} errors", success_count, error_count),
                                         };
-                                        (NACK_REPLY, nack.serialize().unwrap_or_default())
+                                        match nack.serialize() {
+                                            Ok(payload) => (NACK_REPLY, payload),
+                                            Err(e) => {
+                                                dl_log!(level::ERROR, msg_ctx, "Failed to serialize NackReply: {}", e);
+                                                (NACK_REPLY, Vec::new()) // Fallback to empty payload
+                                            }
+                                        }
                                     }
                                 }
                                 Err(e) => {
@@ -213,7 +245,13 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
                                         err_code: ErrorCode::ParseError as i32,
                                         err_msg: format!("Failed to parse delete request: {}", e),
                                     };
-                                    (NACK_REPLY, nack.serialize().unwrap_or_default())
+                                    match nack.serialize() {
+                                        Ok(payload) => (NACK_REPLY, payload),
+                                        Err(ser_err) => {
+                                            dl_log!(level::ERROR, msg_ctx, "Failed to serialize NackReply: {}", ser_err);
+                                            (NACK_REPLY, Vec::new())
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -257,15 +295,38 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
                                     }
                                     
                                     if error_count == 0 {
-                                        // Create size reply with all file sizes
-                                        let reply = create_size_reply(&results, total_size);
-                                        (ACK_REPLY, reply)
+                                        // Create proper RepoDataSizeReply
+                                        let size_reply = RepoDataSizeReply {
+                                            size: results.into_iter().map(|(path, size)| {
+                                                RecordDataSize { id: path, size }
+                                            }).collect(),
+                                        };
+                                        match size_reply.serialize() {
+                                            Ok(payload) => (REPO_DATA_SIZE_REPLY, payload),
+                                            Err(e) => {
+                                                dl_log!(level::ERROR, msg_ctx, "Failed to serialize RepoDataSizeReply: {}", e);
+                                                let nack = NackReply {
+                                                    err_code: ErrorCode::InternalError as i32,
+                                                    err_msg: format!("Serialization error: {}", e),
+                                                };
+                                                match nack.serialize() {
+                                                    Ok(payload) => (NACK_REPLY, payload),
+                                                    Err(_) => (NACK_REPLY, Vec::new()),
+                                                }
+                                            }
+                                        }
                                     } else {
                                         let nack = NackReply {
                                             err_code: ErrorCode::InternalError as i32,
                                             err_msg: format!("Processed {} files, {} errors", results.len(), error_count),
                                         };
-                                        (NACK_REPLY, nack.serialize().unwrap_or_default())
+                                        match nack.serialize() {
+                                            Ok(payload) => (NACK_REPLY, payload),
+                                            Err(e) => {
+                                                dl_log!(level::ERROR, msg_ctx, "Failed to serialize NackReply: {}", e);
+                                                (NACK_REPLY, Vec::new())
+                                            }
+                                        }
                                     }
                                 }
                                 Err(e) => {
@@ -273,12 +334,18 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
                                         err_code: ErrorCode::ParseError as i32,
                                         err_msg: format!("Failed to parse size request: {}", e),
                                     };
-                                    (NACK_REPLY, nack.serialize().unwrap_or_default())
+                                    match nack.serialize() {
+                                        Ok(payload) => (NACK_REPLY, payload),
+                                        Err(ser_err) => {
+                                            dl_log!(level::ERROR, msg_ctx, "Failed to serialize NackReply: {}", ser_err);
+                                            (NACK_REPLY, Vec::new())
+                                        }
+                                    }
                                 }
                             }
                         }
                         REPO_PATH_CREATE_REQUEST => {
-                            println!("worker[{id}] processing RepoPathCreateRequest, payload len: {}", env.payload.len());
+                            println!("worker[{id}] processing RepoPathCreateRequest, payload {:?} len: {}", env.payload ,env.payload.len());
                             // Parse payload to get path and create directory under base_root
                             match parse_path_request(&env.payload) {
                                 Ok(path) => {
@@ -291,20 +358,39 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
                                                     err_code: ErrorCode::SecurityViolation as i32,
                                                     err_msg: format!("Security violation: {}", e),
                                                 };
-                                                (NACK_REPLY, nack.serialize().unwrap_or_default())
+                                                match nack.serialize() {
+                                                    Ok(payload) => (NACK_REPLY, payload),
+                                                    Err(ser_err) => {
+                                                        dl_log!(level::ERROR, msg_ctx, "Failed to serialize NackReply: {}", ser_err);
+                                                        (NACK_REPLY, Vec::new())
+                                                    }
+                                                }
                                             } else {
                                                 // Create directory with -p equivalent (create parent directories)
                                                 match std::fs::create_dir_all(&sanitized.local_path) {
                                                     Ok(()) => {
                                                         println!("Created directory: {}", sanitized.local_path.display());
-                                                        (ACK_REPLY, Vec::new())
+                                                        let ack = AckReply;
+                                                        match ack.serialize() {
+                                                            Ok(payload) => (ACK_REPLY, payload),
+                                                            Err(e) => {
+                                                                dl_log!(level::ERROR, msg_ctx, "Failed to serialize AckReply: {}", e);
+                                                                (ACK_REPLY, Vec::new())
+                                                            }
+                                                        }
                                                     }
                                                     Err(e) => {
                                                         let nack = NackReply {
                                                             err_code: ErrorCode::DirectoryCreationError as i32,
                                                             err_msg: format!("Failed to create directory {}: {}", sanitized.local_path.display(), e),
                                                         };
-                                                        (NACK_REPLY, nack.serialize().unwrap_or_default())
+                                                        match nack.serialize() {
+                                                            Ok(payload) => (NACK_REPLY, payload),
+                                                            Err(ser_err) => {
+                                                                dl_log!(level::ERROR, msg_ctx, "Failed to serialize NackReply: {}", ser_err);
+                                                                (NACK_REPLY, Vec::new())
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
@@ -314,7 +400,13 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
                                                 err_code: ErrorCode::SecurityViolation as i32,
                                                 err_msg: format!("Path sanitization failed: {}", e),
                                             };
-                                            (NACK_REPLY, nack.serialize().unwrap_or_default())
+                                            match nack.serialize() {
+                                                Ok(payload) => (NACK_REPLY, payload),
+                                                Err(ser_err) => {
+                                                    dl_log!(level::ERROR, msg_ctx, "Failed to serialize NackReply: {}", ser_err);
+                                                    (NACK_REPLY, Vec::new())
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -323,7 +415,13 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
                                         err_code: ErrorCode::ParseError as i32,
                                         err_msg: format!("Failed to parse path create request: {}", e),
                                     };
-                                    (NACK_REPLY, nack.serialize().unwrap_or_default())
+                                    match nack.serialize() {
+                                        Ok(payload) => (NACK_REPLY, payload),
+                                        Err(ser_err) => {
+                                            dl_log!(level::ERROR, msg_ctx, "Failed to serialize NackReply: {}", ser_err);
+                                            (NACK_REPLY, Vec::new())
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -340,27 +438,52 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
                                                     err_code: ErrorCode::SecurityViolation as i32,
                                                     err_msg: format!("Security violation: {}", e),
                                                 };
-                                                (NACK_REPLY, nack.serialize().unwrap_or_default())
+                                                match nack.serialize() {
+                                                    Ok(payload) => (NACK_REPLY, payload),
+                                                    Err(ser_err) => {
+                                                        dl_log!(level::ERROR, msg_ctx, "Failed to serialize NackReply: {}", ser_err);
+                                                        (NACK_REPLY, Vec::new())
+                                                    }
+                                                }
                                             } else if sanitized.local_path == base_root {
                                                 // Additional security check: prevent deletion of base_root itself
                                                 let nack = NackReply {
                                                     err_code: ErrorCode::BaseRootDeletionError as i32,
                                                     err_msg: "Cannot delete base root directory".to_string(),
                                                 };
-                                                (NACK_REPLY, nack.serialize().unwrap_or_default())
+                                                match nack.serialize() {
+                                                    Ok(payload) => (NACK_REPLY, payload),
+                                                    Err(ser_err) => {
+                                                        dl_log!(level::ERROR, msg_ctx, "Failed to serialize NackReply: {}", ser_err);
+                                                        (NACK_REPLY, Vec::new())
+                                                    }
+                                                }
                                             } else {
                                                 // Recursively delete directory (rm -r equivalent)
                                                 match std::fs::remove_dir_all(&sanitized.local_path) {
                                                     Ok(()) => {
                                                         println!("Deleted directory: {}", sanitized.local_path.display());
-                                                        (ACK_REPLY, Vec::new())
+                                                        let ack = AckReply;
+                                                        match ack.serialize() {
+                                                            Ok(payload) => (ACK_REPLY, payload),
+                                                            Err(e) => {
+                                                                dl_log!(level::ERROR, msg_ctx, "Failed to serialize AckReply: {}", e);
+                                                                (ACK_REPLY, Vec::new())
+                                                            }
+                                                        }
                                                     }
                                                     Err(e) => {
                                                         let nack = NackReply {
                                                             err_code: ErrorCode::DirectoryDeletionError as i32,
                                                             err_msg: format!("Failed to delete directory {}: {}", sanitized.local_path.display(), e),
                                                         };
-                                                        (NACK_REPLY, nack.serialize().unwrap_or_default())
+                                                        match nack.serialize() {
+                                                            Ok(payload) => (NACK_REPLY, payload),
+                                                            Err(ser_err) => {
+                                                                dl_log!(level::ERROR, msg_ctx, "Failed to serialize NackReply: {}", ser_err);
+                                                                (NACK_REPLY, Vec::new())
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
@@ -370,7 +493,13 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
                                                 err_code: ErrorCode::SecurityViolation as i32,
                                                 err_msg: format!("Path sanitization failed: {}", e),
                                             };
-                                            (NACK_REPLY, nack.serialize().unwrap_or_default())
+                                            match nack.serialize() {
+                                                Ok(payload) => (NACK_REPLY, payload),
+                                                Err(ser_err) => {
+                                                    dl_log!(level::ERROR, msg_ctx, "Failed to serialize NackReply: {}", ser_err);
+                                                    (NACK_REPLY, Vec::new())
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -379,7 +508,13 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
                                         err_code: ErrorCode::ParseError as i32,
                                         err_msg: format!("Failed to parse path delete request: {}", e),
                                     };
-                                    (NACK_REPLY, nack.serialize().unwrap_or_default())
+                                    match nack.serialize() {
+                                        Ok(payload) => (NACK_REPLY, payload),
+                                        Err(ser_err) => {
+                                            dl_log!(level::ERROR, msg_ctx, "Failed to serialize NackReply: {}", ser_err);
+                                            (NACK_REPLY, Vec::new())
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -388,7 +523,13 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
                                 err_code: ErrorCode::BadRequest as i32,
                                 err_msg: format!("Unsupported message type: {}", env.msg_type),
                             };
-                            (NACK_REPLY, nack.serialize().unwrap_or_default())
+                            match nack.serialize() {
+                                Ok(payload) => (NACK_REPLY, payload),
+                                Err(e) => {
+                                    dl_log!(level::ERROR, msg_ctx, "Failed to serialize NackReply: {}", e);
+                                    (NACK_REPLY, Vec::new())
+                                }
+                            }
                         }
                     };
 
@@ -425,56 +566,18 @@ fn parse_delete_request(payload: &[u8]) -> Result<Vec<String>, Box<dyn std::erro
         return Err("Empty payload".into());
     }
     
-    // Try to parse as JSON array of strings
-    let payload_str = std::str::from_utf8(payload)
-        .map_err(|e| format!("Invalid UTF-8 in payload: {}", e))?;
+    // Debug: print first few bytes of payload
+    let debug_len = std::cmp::min(20, payload.len());
+    let debug_bytes = &payload[..debug_len];
+    println!("parse_delete_request: payload {:?} first {} bytes: {:?}", payload, debug_len, debug_bytes);
     
-    // Simple JSON parsing for array of strings
-    // In a real implementation, you'd use serde_json
-    let trimmed = payload_str.trim();
-    if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
-        return Err("Payload is not a JSON array".into());
-    }
+    // Parse as protobuf RepoDataDeleteRequest
+    let delete_request = crate::proto::RepoDataDeleteRequest::deserialize(payload)?;
     
-    let content = &trimmed[1..trimmed.len()-1]; // Remove [ and ]
-    if content.trim().is_empty() {
-        return Ok(Vec::new()); // Empty array
-    }
-    
-    let mut paths = Vec::new();
-    let mut current_path = String::new();
-    let mut in_quotes = false;
-    let mut escape_next = false;
-    
-    for ch in content.chars() {
-        if escape_next {
-            current_path.push(ch);
-            escape_next = false;
-        } else if ch == '\\' {
-            escape_next = true;
-        } else if ch == '"' {
-            in_quotes = !in_quotes;
-        } else if ch == ',' && !in_quotes {
-            // End of current path
-            let trimmed_path = current_path.trim();
-            if !trimmed_path.is_empty() {
-                paths.push(trimmed_path.to_string());
-            }
-            current_path.clear();
-        } else {
-            current_path.push(ch);
-        }
-    }
-    
-    // Don't forget the last path
-    let trimmed_path = current_path.trim();
-    if !trimmed_path.is_empty() {
-        paths.push(trimmed_path.to_string());
-    }
-    
-    if paths.is_empty() {
-        return Err("No valid paths found in payload".into());
-    }
+    // Extract paths from the locations
+    let paths: Vec<String> = delete_request.loc.into_iter()
+        .map(|location| location.path)
+        .collect();
     
     Ok(paths)
 }
@@ -483,8 +586,24 @@ fn parse_delete_request(payload: &[u8]) -> Result<Vec<String>, Box<dyn std::erro
 /// Expected format: JSON array of strings representing relative paths
 /// Example: ["file1.txt", "subdir/file2.txt"]
 fn parse_size_request(payload: &[u8]) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    // Reuse the same parsing logic as delete request
-    parse_delete_request(payload)
+    if payload.is_empty() {
+        return Err("Empty payload".into());
+    }
+    
+    // Debug: print first few bytes of payload
+    let debug_len = std::cmp::min(20, payload.len());
+    let debug_bytes = &payload[..debug_len];
+    println!("parse_size_request: payload first {} bytes: {:?}", debug_len, debug_bytes);
+    
+    // Parse as protobuf RepoDataGetSizeRequest
+    let size_request = crate::proto::RepoDataGetSizeRequest::deserialize(payload)?;
+    
+    // Extract paths from the locations
+    let paths: Vec<String> = size_request.loc.into_iter()
+        .map(|location| location.path)
+        .collect();
+    
+    Ok(paths)
 }
 
 /// Parse path request payload to extract a single path
@@ -497,7 +616,7 @@ fn parse_path_request(payload: &[u8]) -> Result<String, Box<dyn std::error::Erro
     // Debug: print first few bytes of payload
     let debug_len = std::cmp::min(20, payload.len());
     let debug_bytes = &payload[..debug_len];
-    println!("parse_path_request: payload first {} bytes: {:?}", debug_len, debug_bytes);
+    println!("parse_path_request: payload {:?} first {} bytes: {:?}", payload, debug_len, debug_bytes);
     
     // Try to parse as raw UTF-8 string first (most likely case)
     if let Ok(path_str) = std::str::from_utf8(payload) {
