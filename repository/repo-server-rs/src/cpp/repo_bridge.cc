@@ -232,7 +232,7 @@ void server_start(::rust::Str config_path, ::rust::Str repo_public_key, ::rust::
 
     // Create and start the proxy server
     ServerFactory server_factory(log_ctx);
-    g_proxy_server = server_factory.create(ServerType::PROXY_BASIC_ZMQ, socket_options, socket_credentials);
+    g_proxy_server = server_factory.create(ServerType::PROXY_CUSTOM, socket_options, socket_credentials);
     
     // Start proxy in a separate thread (non-blocking)
     g_proxy_thread = std::thread([&]() {
@@ -283,37 +283,33 @@ void server_join() {
 
 namespace ZMQBridge {
 
-// Global communicator for ZMQ INPROC communication
-static std::unique_ptr<ICommunicator> g_zmq_communicator = nullptr;
-
 rust::Vec<std::uint8_t> zmq_recv(std::int32_t timeout_ms) {
   try {
-    if (!g_zmq_communicator) {
-      // Initialize the ZMQ INPROC communicator if not already done
-      LogContext log_ctx;
-      log_ctx.thread_name = "rust-zmq-bridge";
-      
-      // Create INPROC client socket configuration
-      SocketOptions opt;
-      opt.scheme = URIScheme::INPROC;
-      opt.class_type = SocketClassType::CLIENT;
-      opt.direction_type = SocketDirectionalityType::BIDIRECTIONAL;
-      opt.communication_type = SocketCommunicationType::ASYNCHRONOUS;
-      opt.connection_life = SocketConnectionLife::PERSISTENT;
-      opt.protocol_type = ProtocolType::ZQTP;
-      opt.host = "workers";
-      opt.local_id = "rust_worker_inproc_client";
-      
-      // No credentials needed for INPROC
-      CredentialFactory cred_factory;
-      auto credentials = cred_factory.create(ProtocolType::ZQTP, std::unordered_map<CredentialType, std::string>());
-      
-      CommunicatorFactory comm_factory(log_ctx);
-      g_zmq_communicator = comm_factory.create(opt, *credentials, timeout_ms, timeout_ms);
-    }
+    // Create a new communicator for each call to avoid race conditions
+    // Each worker thread should have its own communicator instance
+    LogContext log_ctx;
+    log_ctx.thread_name = "rust-zmq-bridge";
+    
+    // Create INPROC client socket configuration
+    SocketOptions opt;
+    opt.scheme = URIScheme::INPROC;
+    opt.class_type = SocketClassType::CLIENT;
+    opt.direction_type = SocketDirectionalityType::BIDIRECTIONAL;
+    opt.communication_type = SocketCommunicationType::ASYNCHRONOUS;
+    opt.connection_life = SocketConnectionLife::INTERMITTENT;
+    opt.protocol_type = ProtocolType::ZQTP;
+    opt.host = "workers";
+    opt.local_id = "rust_worker_inproc_client";
+    
+    // No credentials needed for INPROC
+    CredentialFactory cred_factory;
+    auto credentials = cred_factory.create(ProtocolType::ZQTP, std::unordered_map<CredentialType, std::string>());
+    
+    CommunicatorFactory comm_factory(log_ctx);
+    auto communicator = comm_factory.create(opt, *credentials, timeout_ms, timeout_ms);
     
     // Receive message with timeout
-    auto resp = g_zmq_communicator->receive(MessageType::GOOGLE_PROTOCOL_BUFFER);
+    auto resp = communicator->receive(MessageType::GOOGLE_PROTOCOL_BUFFER);
     
     if (resp.time_out) {
       return rust::Vec<std::uint8_t>(); // Timeout, no message available - return empty vector
@@ -350,9 +346,27 @@ rust::Vec<std::uint8_t> zmq_recv(std::int32_t timeout_ms) {
 
 void zmq_send(rust::Slice<const std::uint8_t> payload, std::uint16_t msg_type, rust::Str correlation_id) {
   try {
-    if (!g_zmq_communicator) {
-      throw std::runtime_error("ZMQ communicator not initialized");
-    }
+    // Create a new communicator for each call to avoid race conditions
+    LogContext log_ctx;
+    log_ctx.thread_name = "rust-zmq-bridge";
+    
+    // Create INPROC client socket configuration
+    SocketOptions opt;
+    opt.scheme = URIScheme::INPROC;
+    opt.class_type = SocketClassType::CLIENT;
+    opt.direction_type = SocketDirectionalityType::BIDIRECTIONAL;
+    opt.communication_type = SocketCommunicationType::ASYNCHRONOUS;
+    opt.connection_life = SocketConnectionLife::INTERMITTENT;
+    opt.protocol_type = ProtocolType::ZQTP;
+    opt.host = "workers";
+    opt.local_id = "rust_worker_inproc_client";
+    
+    // No credentials needed for INPROC
+    CredentialFactory cred_factory;
+    auto credentials = cred_factory.create(ProtocolType::ZQTP, std::unordered_map<CredentialType, std::string>());
+    
+    CommunicatorFactory comm_factory(log_ctx);
+    auto communicator = comm_factory.create(opt, *credentials, 1000, 1000);
     
     // Convert Rust data to C++ types
     const std::string payload_str(reinterpret_cast<const char*>(payload.data()), payload.size());
@@ -375,7 +389,7 @@ void zmq_send(rust::Slice<const std::uint8_t> payload, std::uint16_t msg_type, r
     envelope->setPayload(std::move(msg));
     
     // Send the message
-    g_zmq_communicator->send(*envelope);
+    communicator->send(*envelope);
     
   } catch (const std::exception& e) {
     throw std::runtime_error(std::string("ZMQ send failed: ") + e.what());

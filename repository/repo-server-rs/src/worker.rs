@@ -126,7 +126,7 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
     thread::spawn(move || {
         println!("worker[{id}] starting, running flag: {}", running.load(Ordering::Relaxed));
         while running.load(Ordering::Relaxed) {
-            match messenger.recv(100) { // Increased timeout to 100ms
+            match messenger.recv(1000) { // Increased timeout to 100ms
                 Ok(Some(env)) => {
                     println!("worker[{id}] received message: {:?}", env.msg_type);
                     // --- decode, dispatch, reply (DONE) ---

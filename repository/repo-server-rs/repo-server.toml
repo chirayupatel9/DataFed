@@ -1,15 +1,15 @@
 # Address of the DataFed core (the server will connect to it)
 
-core_server = "tcp://datafed-core:7512"
+core_server = "tcp://localhost:9999"
 
 # Directory that contains the key files used by the sample server code:
 #   datafed-repo-key.pub
 #   datafed-repo-key.priv
 #   datafed-core-key.pub
-cred_dir = "/opt/datafed/keys/"
+cred_dir = "/mnt/storage/datafed_rs/DataFed/keys/"
 
 # Repo server listen port
-port = 9000
+port = 10000
 
 # Request timeout (ms)
 timeout = 20000

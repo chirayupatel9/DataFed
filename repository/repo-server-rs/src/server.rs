@@ -38,8 +38,8 @@ impl RepoServer {
         // Start the C++ proxy via FFI bridge
         // The C++ version creates:
         // - TCP server socket (external, secure) on port 10000
-        // - INPROC client socket (internal) connecting to "workers" endpoint
-        // - ProxyBasicZMQ or ProxyCustom to bridge them
+        // - INPROC server socket (internal) binding to "workers" endpoint
+        // - ProxyCustom to bridge them
         
         // Load repo server keys for authentication (like C++ RepoServer::loadKeys)
         let repo_public_key = self.cfg.load_repo_public_key()
