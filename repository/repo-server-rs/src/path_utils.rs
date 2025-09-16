@@ -45,7 +45,7 @@ impl PathSanitizer {
 
         // Check if path starts with globus_collection_path
         let globus_path_str = self.globus_collection_path.to_string_lossy();
-        if self.prefixes_equal(&sanitized_request_path, &globus_path_str, globus_path_str.len()) {
+        if sanitized_request_path.starts_with(&*globus_path_str) {
             // Path already contains the globus collection path
             self.handle_ambiguous_path(&sanitized_request_path, &globus_path_str)
         } else {
@@ -64,6 +64,15 @@ impl PathSanitizer {
 
     /// Handle potentially ambiguous paths - equivalent to C++ ambiguity detection
     fn handle_ambiguous_path(&self, sanitized_path: &str, globus_path: &str) -> Result<SanitizedPath, PathError> {
+        // If the path already starts with the globus collection path, use it directly
+        if sanitized_path.starts_with(&*globus_path) {
+            let final_path = sanitized_path.to_string();
+            return Ok(SanitizedPath {
+                local_path: PathBuf::from(final_path),
+                is_ambiguous: false,
+            });
+        }
+
         let local_path_1 = if sanitized_path.starts_with('/') {
             format!("{}{}", globus_path, sanitized_path)
         } else {

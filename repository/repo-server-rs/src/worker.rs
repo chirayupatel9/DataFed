@@ -41,6 +41,7 @@ impl ZMQInprocMessenger {
     pub fn new(worker_id: usize) -> Self {
         Self { worker_id }
     }
+    
 }
 
 impl Messenger for ZMQInprocMessenger {
@@ -66,8 +67,10 @@ impl Messenger for ZMQInprocMessenger {
                 // Extract message type from first 2 bytes (little-endian)
                 let msg_type = u16::from_le_bytes([payload[0], payload[1]]);
                 
-                // For now, use a default correlation ID - in practice this would come from the message
-                let correlation_id = format!("worker_{}_{}", self.worker_id, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+        // Get the correlation ID from the C++ side
+        let correlation_id = get_last_correlation_id();
+        println!("🔍 ZMQInprocMessenger::recv: Retrieved correlation_id from C++: {}", correlation_id);
+        println!("🔍 ZMQInprocMessenger::recv: This correlation_id will be used for the response");
                 
                 // The rest is the actual payload
                 let message_payload = payload[2..].to_vec();
@@ -93,15 +96,27 @@ impl Messenger for ZMQInprocMessenger {
     fn send(&self, env: Envelope) -> io::Result<()> {
         // Use the C++ FFI bridge to send messages through the INPROC socket
         // Send the payload directly - the C++ side will handle message type routing
-        println!("ZMQInprocMessenger::send called: msg_type={}, corr_id={}, payload_len={}", 
-                 env.msg_type, env.correlation_id, env.payload.len());
+        println!("🔵 ZMQInprocMessenger::send called: msg_type={} (0x{:x}), corr_id={}, payload_len={}", 
+                 env.msg_type, env.msg_type, env.correlation_id, env.payload.len());
+        
+        // Debug: print first few bytes of payload
+        let debug_len = std::cmp::min(20, env.payload.len());
+        let debug_bytes = &env.payload[..debug_len];
+        println!("🔵 Payload preview (first {} bytes): {:?}", debug_len, debug_bytes);
+        
+        // Send through INPROC socket - the ZMQ proxy should forward this back to external clients
+        println!("🔵 ZMQInprocMessenger::send: Sending to INPROC socket 'workers'");
+        println!("🔵 ZMQInprocMessenger::send: C++ proxy should forward this to external TCP socket localhost:10000");
+        println!("🔵 ZMQInprocMessenger::send: Target external client should receive this on their DEALER socket");
+        
         match zmq_send(&env.payload, env.msg_type, &env.correlation_id) {
             Ok(()) => {
-                println!("ZMQInprocMessenger::send successful");
+                println!("✅ ZMQInprocMessenger::send successful - message sent to INPROC socket (proxy should forward)");
+                println!("✅ ZMQInprocMessenger::send: C++ zmq_send() completed successfully");
                 Ok(())
             },
             Err(e) => {
-                eprintln!("ZMQ send error: {}", e);
+                eprintln!("❌ ZMQ send error: {}", e);
                 Err(io::Error::new(io::ErrorKind::Other, format!("ZMQ send failed: {}", e)))
             }
         }
@@ -142,6 +157,14 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
                 Ok(Some(env)) => {
                     let mut msg_ctx = log_ctx.clone();
                     msg_ctx.correlation_id = env.correlation_id.clone();
+                    
+                    println!("🟢 Worker[{}] received message type: {} (0x{:x}), corr_id: {}, payload_len: {}", 
+                             id, env.msg_type, env.msg_type, env.correlation_id, env.payload.len());
+                    
+                    // Debug: print first few bytes of payload
+                    let debug_len = std::cmp::min(20, env.payload.len());
+                    let debug_bytes = &env.payload[..debug_len];
+                    println!("🟢 Payload preview (first {} bytes): {:?}", debug_len, debug_bytes);
                     
                     dl_info!(msg_ctx, "Received message type: {} (0x{:x})", env.msg_type, env.msg_type);
                     // --- decode, dispatch, reply (DONE) ---
@@ -534,13 +557,25 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
                     };
 
                     // Send reply (preserve correlation id)
-                    println!("worker[{id}] sending reply type: {} (0x{:x})", reply_type, reply_type);
-                    let _ = messenger.send(Envelope {
+                    println!("🟡 Worker[{}] sending reply type: {} (0x{:x}), corr_id: {}, payload_len: {}", 
+                             id, reply_type, reply_type, correlation_id, payload.len());
+                    
+                    // Debug: print first few bytes of reply payload
+                    let debug_len = std::cmp::min(20, payload.len());
+                    let debug_bytes = &payload[..debug_len];
+                    println!("🟡 Reply payload preview (first {} bytes): {:?}", debug_len, debug_bytes);
+                    
+                    let result = messenger.send(Envelope {
                         correlation_id,
                         msg_type: reply_type,
                         payload,
                         key: None,
                     });
+                    
+                    match result {
+                        Ok(()) => println!("✅ Worker[{}] successfully sent reply", id),
+                        Err(e) => eprintln!("❌ Worker[{}] failed to send reply: {}", id, e),
+                    }
                 }
                 Ok(None) => { 
                     // poll timeout - add small delay to prevent busy waiting
@@ -607,7 +642,7 @@ fn parse_size_request(payload: &[u8]) -> Result<Vec<String>, Box<dyn std::error:
 }
 
 /// Parse path request payload to extract a single path
-/// The payload appears to be the raw path string, not protobuf-encoded
+/// Parse the protobuf field data to extract the path
 fn parse_path_request(payload: &[u8]) -> Result<String, Box<dyn std::error::Error>> {
     if payload.is_empty() {
         return Err("Empty payload".into());
@@ -618,59 +653,31 @@ fn parse_path_request(payload: &[u8]) -> Result<String, Box<dyn std::error::Erro
     let debug_bytes = &payload[..debug_len];
     println!("parse_path_request: payload {:?} first {} bytes: {:?}", payload, debug_len, debug_bytes);
     
-    // Try to parse as raw UTF-8 string first (most likely case)
-    if let Ok(path_str) = std::str::from_utf8(payload) {
-        let trimmed = path_str.trim();
-        if !trimmed.is_empty() {
-            println!("parse_path_request: extracted path from raw string: '{}'", trimmed);
-            return Ok(trimmed.to_string());
-        }
-    }
-    
-    // Fallback: try to parse as protobuf string field
-    // Field 1 (path) is encoded as: 0x0A <length> <string_bytes>
-    for i in 0..payload.len().saturating_sub(2) {
-        if payload[i] == 0x0A { // Field 1 marker
-            let length = payload[i + 1] as usize;
-            if i + 2 + length <= payload.len() {
-                let path_bytes = &payload[i + 2..i + 2 + length];
-                if let Ok(path_str) = std::str::from_utf8(path_bytes) {
-                    println!("parse_path_request: extracted path from protobuf: '{}'", path_str);
-                    return Ok(path_str.to_string());
-                }
+    // The payload is a raw protobuf string field, not a complete message
+    // Format: [field_tag, length, string_bytes...]
+    if payload.len() >= 2 && payload[0] == 0x0A { // Field 1, wire type 2 (string)
+        let length = payload[1] as usize;
+        if payload.len() >= 2 + length {
+            let path_bytes = &payload[2..2 + length];
+            if let Ok(path_str) = std::str::from_utf8(path_bytes) {
+                println!("parse_path_request: extracted path from protobuf field: '{}'", path_str);
+                return Ok(path_str.to_string());
             }
         }
     }
     
-    // Fallback: try to parse as JSON string
-    let payload_str = std::str::from_utf8(payload)
-        .map_err(|e| format!("Invalid UTF-8 in payload: {}", e))?;
-    
-    let trimmed = payload_str.trim();
-    if trimmed.starts_with('"') && trimmed.ends_with('"') {
-        // Extract content between quotes, handling escape sequences
-        let content = &trimmed[1..trimmed.len()-1]; // Remove " and "
-        let mut result = String::new();
-        let mut escape_next = false;
-        
-        for ch in content.chars() {
-            if escape_next {
-                result.push(ch);
-                escape_next = false;
-            } else if ch == '\\' {
-                escape_next = true;
-            } else {
-                result.push(ch);
-            }
+    // Fallback: try to parse as complete protobuf message
+    match crate::proto::RepoPathCreateRequest::deserialize(payload) {
+        Ok(request) => {
+            let path = request.path;
+            println!("parse_path_request: extracted path from complete protobuf: '{}'", path);
+            Ok(path)
         }
-        
-        if !result.is_empty() {
-            println!("parse_path_request: extracted path from JSON: '{}'", result);
-            return Ok(result);
+        Err(e) => {
+            println!("parse_path_request: failed to parse protobuf: {}", e);
+            Err(format!("Failed to parse RepoPathCreateRequest: {}", e).into())
         }
     }
-    
-    Err("Could not parse path from any supported format".into())
 }
 
 /// Create a size reply with file sizes and total

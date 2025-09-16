@@ -23,7 +23,8 @@ mod ffi {
         fn server_start(
             config_path: &str,
             repo_public_key: &str,
-            repo_private_key: &str
+            repo_private_key: &str,
+            port: u16
         ) -> Result<()>;
 
         #[namespace = "ServerBridge"]
@@ -37,6 +38,12 @@ mod ffi {
 
         #[namespace = "ZMQBridge"]
         fn zmq_send(payload: &[u8], msg_type: u16, correlation_id: &str) -> Result<()>;
+
+        #[namespace = "ZMQBridge"]
+        fn zmq_send_external(payload: &[u8], msg_type: u16, correlation_id: &str) -> Result<()>;
+        
+        #[namespace = "ZMQBridge"]
+        fn get_last_correlation_id() -> String;
     }
 }
 pub use ffi::*;

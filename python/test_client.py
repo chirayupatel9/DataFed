@@ -284,7 +284,15 @@ class RepoClient:
             raise Exception(f"Failed to set Curve encryption keys: {e}")
         
         # Connect to repository server
+        print(f"🔌 Python client: Connecting to repository server at {self.repo_address}")
+        print(f"🔌 Python client: Socket type: DEALER")
+        print(f"🔌 Python client: Host: {host}, Port: {port}")
+        print(f"🔌 Python client: Using Curve encryption with keys:")
+        print(f"🔌 Python client:   - Core public key: {self.core_pub_key[:10]}...")
+        print(f"🔌 Python client:   - Core private key: {self.core_priv_key[:10]}...")
+        print(f"🔌 Python client:   - Server public key: {self.repo_pub_key[:10]}...")
         self._socket.connect(self.repo_address)
+        print(f"✅ Python client: Connected to {self.repo_address}")
         
         self.logger.info(f"Connected to repository at {self.repo_address}")
         self.logger.debug(f"Core public key: {self.core_pub_key}")
@@ -303,83 +311,125 @@ class RepoClient:
         
         # Send message using same framing as core service
         self._send_message(request_msg)
-        
         # Receive response with timeout
-        return self._receive_message(timeout)
+        result = self._receive_message(timeout)
+        if result is None or result[0] is None:
+            raise Exception(f"Timeout waiting for response from repository")
+        return result
     
     def _send_message(self, message):
         """Send message using exact same framing as core service"""
+        print(f"📤 Python client: Preparing to send message: {message.DESCRIPTOR.name}")
+        
         # Find message type (same as core service)
         if message.DESCRIPTOR not in self._msg_type_by_desc:
             available_types = [desc.name for desc in self._msg_type_by_desc.keys()]
             raise Exception(f"Attempt to send unregistered message type: {message.DESCRIPTOR.name}. Available types: {available_types}")
-        
         msg_type = self._msg_type_by_desc[message.DESCRIPTOR]
+        print(f"📤 Python client: Message type: {msg_type} (0x{msg_type:04x})")
         self.logger.debug(f"Sending message: {message.DESCRIPTOR.name} (type: {msg_type})")
         
         # Send using exact same framing as Connection.py
+        print("📤 Python client: Sending BEGIN_DATAFED header...")
         self._socket.send_string("BEGIN_DATAFED", zmq.SNDMORE)
         route_count = 0
+        print(f"📤 Python client: Sending route count: {route_count}")
         self._socket.send(struct.pack("!i", route_count), zmq.SNDMORE)
+        print("📤 Python client: Sending empty route...")
         self._socket.send(b"", zmq.SNDMORE)
         
         correlation_id = str(uuid.uuid4())
+        self._expected_correlation_id = correlation_id  # Store for comparison in receive
+        print(f"📤 Python client: Generated correlation ID: {correlation_id}")
+        print(f"📤 Python client: Sending correlation ID: {correlation_id}")
         self.logger.debug(f"Sending message with correlation id: {correlation_id}")
         self._socket.send_string(correlation_id, zmq.SNDMORE)
+        print(f"📤 Python client: Sending core pub key: {self.core_pub_key[:10]}...")
         self._socket.send_string(self.core_pub_key, zmq.SNDMORE)  # Use core pub key
+        print("📤 Python client: Sending 'no_user'...")
         self._socket.send_string("no_user", zmq.SNDMORE)
         
         # Serialize message
         data = message.SerializeToString()
         data_sz = len(data)
+        print(f"📤 Python client: Serialized message size: {data_sz} bytes")
         self.logger.debug(f"Serialized message size: {data_sz} bytes")
-        
+            
         # Build message frame (same as core service)
         frame = struct.pack(">LBBH", data_sz, msg_type >> 8, msg_type & 0xFF, 0)
+        print(f"📤 Python client: Message frame: size={data_sz}, type={msg_type} (0x{msg_type:04x}), frame_bytes={frame.hex()}")
         self.logger.debug(f"Message frame: size={data_sz}, type={msg_type} (0x{msg_type:04x}), frame_bytes={frame.hex()}")
         
         if data_sz > 0:
+            print(f"📤 Python client: Sending frame and {data_sz} bytes of data...")
             self._socket.send(frame, zmq.SNDMORE)
             self._socket.send(data, 0)
         else:
+            print("📤 Python client: Sending frame with empty data...")
             self._socket.send(frame, zmq.SNDMORE)
             self._socket.send(b"", 0)
+        
+        print("✅ Python client: Message sent successfully")
     
     def _receive_message(self, timeout_ms):
         """Receive message using exact same framing as core service"""
+        print(f"🔍 Python client: Waiting for response with timeout {timeout_ms}ms...")
+        
         # Wait for data with timeout
         ready = self._socket.poll(timeout_ms)
         if ready == 0:
-            raise Exception(f"Timeout waiting for response from repository")
+            print("⏰ Python client: Timeout waiting for response from repository")
+            return None, None, None  # Return None like DataFed client does
         
+        print("📨 Python client: Received data from repository, parsing message...")
         self.logger.debug("Received data from repository, parsing message...")
         
-        # Receive using exact same framing as Connection.py
+        # Receive using exact same framing as DataFed Connection.py
+        print("📨 Python client: Receiving null frame...")
         self._socket.recv_string(0)  # null frame
         
+        print("📨 Python client: Looking for BEGIN_DATAFED header...")
         header = ""
         while header != "BEGIN_DATAFED":
             header = self._socket.recv_string(0)
+            print(f"📨 Python client: Received header: '{header}'")
         
+        print("📨 Python client: Found BEGIN_DATAFED, receiving route count...")
         msg = self._socket.recv(0)
         route_count = struct.unpack("!i", msg)[0]
+        print(f"📨 Python client: Route count: {route_count}")
         self.logger.debug(f"Route count: {route_count}")
         
+        print(f"📨 Python client: Receiving {route_count} route frames...")
         for i in range(0, route_count):
             self._socket.recv(0)  # route
         
+        print("📨 Python client: Receiving null packet...")
         self._socket.recv(0)  # null_packet
+        
+        print("📨 Python client: Receiving correlation ID...")
         correlation_id = self._socket.recv_string(0)
+        print(f"📨 Python client: Received correlation ID: {correlation_id}")
+        print(f"📨 Python client: Expected correlation ID: {getattr(self, '_expected_correlation_id', 'UNKNOWN')}")
         self.logger.debug(f"Received message with correlation id: {correlation_id}")
+        
+        print("📨 Python client: Receiving key...")
         key = self._socket.recv_string(0)
+        print(f"📨 Python client: Key: {key[:10]}...")
+        
+        print("📨 Python client: Receiving client...")
         client = self._socket.recv_string(0)
+        print(f"📨 Python client: Client: {client}")
         self.logger.debug(f"Received from client: {client}, key: {key[:10]}...")
         
         # Receive custom frame header
+        print("📨 Python client: Receiving frame header...")
         frame_data = self._socket.recv(0)
         frame_values = struct.unpack(">LBBH", frame_data)
         msg_type = (frame_values[1] << 8) | frame_values[2]
         
+        print(f"📨 Python client: Message type: {msg_type} (0x{msg_type:04x}), size: {frame_values[0]}")
+        print(f"📨 Python client: Frame values: {frame_values}")
         self.logger.debug(f"Received message type: {msg_type} (0x{msg_type:04x}), size: {frame_values[0]}")
         self.logger.debug(f"Frame values: {frame_values}")
         
@@ -391,11 +441,14 @@ class RepoClient:
         self.logger.debug(f"Message descriptor: {desc.name}")
         
         if frame_values[0] > 0:
+            # Create message by parsing content
             data = self._socket.recv(0)
             self.logger.debug(f"Received payload: {len(data)} bytes")
             reply = desc._concrete_class()
             reply.ParseFromString(data)
         else:
+            # No content, just create message instance
+            data = self._socket.recv(0)
             self.logger.debug("No payload data")
             reply = desc._concrete_class()
         
@@ -438,7 +491,6 @@ class RepoClient:
         """
         request = auth.RepoPathCreateRequest()
         request.path = path
-        
         reply, msg_type, context = self.send_repo_request(request)
         return reply
     
@@ -537,6 +589,7 @@ def main():
                     
                     for path in test_paths:
                         try:
+                            print(f'Sending path: {path}')
                             path_reply = repo_client.create_path(path)
                             print(f"✓ Created path: {path}")
                         except Exception as e:

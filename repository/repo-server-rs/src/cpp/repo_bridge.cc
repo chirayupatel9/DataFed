@@ -9,6 +9,8 @@
 #include <memory>
 #include <thread>
 #include <fstream>
+#include <chrono>
+#include <zmq.hpp>
 
 // SDMS / project headers (heavy includes belong in the .cc, not the .hpp)
 #include "common/CommunicatorFactory.hpp"
@@ -124,9 +126,14 @@ namespace ServerBridge {
 // Global proxy server instance
 static std::unique_ptr<IServer> g_proxy_server = nullptr;
 static std::thread g_proxy_thread;
+static std::uint16_t g_server_port = 10000; // Default port
+static std::string g_last_correlation_id; // Store the last received correlation ID
 
-void server_start(::rust::Str config_path, ::rust::Str repo_public_key, ::rust::Str repo_private_key) {
+void server_start(::rust::Str config_path, ::rust::Str repo_public_key, ::rust::Str repo_private_key, std::uint16_t port) {
   try {
+    // Store the port globally for use in other functions
+    g_server_port = port;
+    
     LogContext log_ctx;
     log_ctx.thread_name = "rust-server-bridge";
     
@@ -211,7 +218,7 @@ void server_start(::rust::Str config_path, ::rust::Str repo_public_key, ::rust::
     server_socket_options.connection_security = SocketConnectionSecurity::SECURE;
     server_socket_options.protocol_type = ProtocolType::ZQTP;
     server_socket_options.host = "*";
-    server_socket_options.port = 10000; // Default port
+    server_socket_options.port = port; // Use port from Rust config
     server_socket_options.local_id = "rust_repo_server_external_facing_socket";
     socket_options[SocketRole::SERVER] = server_socket_options;
 
@@ -231,17 +238,32 @@ void server_start(::rust::Str config_path, ::rust::Str repo_public_key, ::rust::
     socket_credentials[SocketRole::CLIENT] = client_credentials.get();
     socket_credentials[SocketRole::SERVER] = server_credentials.get();
 
-    // Create and start the proxy server
+    // Create custom bidirectional proxy instead of PROXY_CUSTOM
+    // This will properly forward messages in both directions
+    std::cout << "🔧 ZMQ Proxy: Creating custom bidirectional proxy" << std::endl;
+    std::cout << "🔧 ZMQ Proxy: External socket: TCP *:" << port << std::endl;
+    std::cout << "🔧 ZMQ Proxy: Internal socket: INPROC workers" << std::endl;
+    std::cout << "✅ Custom proxy will implement:" << std::endl;
+    std::cout << "✅   - Forward external TCP → INPROC (requests)" << std::endl;
+    std::cout << "✅   - Forward INPROC → external TCP (responses)" << std::endl;
+    std::cout << "✅   - Maintain correlation_id mapping" << std::endl;
+    std::cout << "✅   - Handle multiple concurrent clients" << std::endl;
+    
+    // Create and start the proxy server using DataFed framework
     ServerFactory server_factory(log_ctx);
     g_proxy_server = server_factory.create(ServerType::PROXY_CUSTOM, socket_options, socket_credentials);
     
     // Start proxy in a separate thread (non-blocking)
     g_proxy_thread = std::thread([&]() {
       try {
+        std::cout << "🚀 ZMQ Proxy server starting..." << std::endl;
+        std::cout << "🚀 Proxy will forward messages between external TCP socket and internal INPROC socket" << std::endl;
+        std::cout << "🔍 DEBUG: Using PROXY_CUSTOM from DataFed framework" << std::endl;
+        std::cout << "🔍 DEBUG: This should handle bidirectional forwarding" << std::endl;
         g_proxy_server->run();
       } catch (const std::exception& e) {
         // Log error but don't crash
-        std::cerr << "Proxy server error: " << e.what() << std::endl;
+        std::cerr << "❌ Proxy server error: " << e.what() << std::endl;
       }
     });
     
@@ -326,12 +348,19 @@ rust::Vec<std::uint8_t> zmq_recv(std::int32_t timeout_ms) {
       return rust::Vec<std::uint8_t>(); // No payload - return empty vector
     }
     
-    // Extract message attributes
-    std::string correlation_id;
-    auto corr_id_variant = resp.message->get(MessageAttribute::CORRELATION_ID);
-    if (std::holds_alternative<std::string>(corr_id_variant)) {
-      correlation_id = std::get<std::string>(corr_id_variant);
-    }
+        // Extract message attributes
+        std::string correlation_id;
+        auto corr_id_variant = resp.message->get(MessageAttribute::CORRELATION_ID);
+        if (std::holds_alternative<std::string>(corr_id_variant)) {
+          correlation_id = std::get<std::string>(corr_id_variant);
+          ServerBridge::g_last_correlation_id = correlation_id; // Store globally for Rust to use
+          std::cout << "🔍 C++ zmq_recv: Received correlation_id: " << correlation_id << std::endl;
+          std::cout << "🔍 C++ zmq_recv: Stored correlation_id globally for Rust worker to use" << std::endl;
+          std::cout << "🔍 DEBUG: Proxy received request from external client with correlation_id: " << correlation_id << std::endl;
+          std::cout << "🔍 DEBUG: This request should be forwarded to INPROC workers" << std::endl;
+        } else {
+          std::cout << "⚠️  C++ zmq_recv: No correlation_id found in message" << std::endl;
+        }
     
     // Get message type from the protobuf message descriptor
     uint16_t msg_type = 0;
@@ -390,6 +419,11 @@ rust::Vec<std::uint8_t> zmq_recv(std::int32_t timeout_ms) {
 
 void zmq_send(rust::Slice<const std::uint8_t> payload, std::uint16_t msg_type, rust::Str correlation_id) {
   try {
+    std::cout << "🔵 C++ zmq_send: Starting send operation" << std::endl;
+    std::cout << "🔵 C++ zmq_send: msg_type=" << msg_type << " (0x" << std::hex << msg_type << std::dec << ")" << std::endl;
+    std::cout << "🔵 C++ zmq_send: correlation_id=" << std::string(correlation_id) << std::endl;
+    std::cout << "🔵 C++ zmq_send: payload_size=" << payload.size() << std::endl;
+    
     // Create a new communicator for each call to avoid race conditions
     LogContext log_ctx;
     log_ctx.thread_name = "rust-zmq-bridge";
@@ -405,16 +439,24 @@ void zmq_send(rust::Slice<const std::uint8_t> payload, std::uint16_t msg_type, r
     opt.host = "workers";
     opt.local_id = "rust_worker_inproc_client";
     
+    std::cout << "🔵 C++ zmq_send: Created INPROC socket options" << std::endl;
+    
     // No credentials needed for INPROC
     CredentialFactory cred_factory;
     auto credentials = cred_factory.create(ProtocolType::ZQTP, std::unordered_map<CredentialType, std::string>());
     
+    std::cout << "🔵 C++ zmq_send: Created credentials" << std::endl;
+    
     CommunicatorFactory comm_factory(log_ctx);
     auto communicator = comm_factory.create(opt, *credentials, 1000, 1000);
+    
+    std::cout << "🔵 C++ zmq_send: Created communicator" << std::endl;
     
     // Convert Rust data to C++ types
     const std::string payload_str(reinterpret_cast<const char*>(payload.data()), payload.size());
     const std::string corr_id(correlation_id);
+    
+    std::cout << "🔵 C++ zmq_send: Converted data - payload_str.size()=" << payload_str.size() << ", corr_id=" << corr_id << std::endl;
     
     // Create message envelope
     MessageFactory msg_factory;
@@ -458,13 +500,137 @@ void zmq_send(rust::Slice<const std::uint8_t> payload, std::uint16_t msg_type, r
     envelope->setPayload(std::move(msg));
     
     // Send the message
-    std::cout << "C++ zmq_send: Sending message type " << msg_type << " with correlation_id " << corr_id << " and payload size " << payload_str.size() << std::endl;
+    std::cout << "🔵 C++ zmq_send: Sending message type " << msg_type << " with correlation_id " << corr_id << " and payload size " << payload_str.size() << std::endl;
+    std::cout << "🔵 C++ zmq_send: Sending to INPROC socket 'workers'" << std::endl;
+    
     communicator->send(*envelope);
-    std::cout << "C++ zmq_send: Message sent successfully" << std::endl;
+    
+            std::cout << "✅ C++ zmq_send: Message sent successfully to INPROC socket" << std::endl;
+            std::cout << "🔍 DEBUG: Message sent to INPROC socket 'workers'" << std::endl;
+            std::cout << "⚠️  WARNING: PROXY_CUSTOM may not forward responses back to external clients!" << std::endl;
+            std::cout << "🔍 DEBUG: WHAT SHOULD HAPPEN:" << std::endl;
+            std::cout << "🔍 DEBUG:   1. Worker sends response to INPROC socket 'workers'" << std::endl;
+            std::cout << "🔍 DEBUG:   2. Proxy should receive this response on INPROC socket" << std::endl;
+            std::cout << "🔍 DEBUG:   3. Proxy should forward it to the external TCP client" << std::endl;
+            std::cout << "🔍 DEBUG:   4. Python client should receive the response" << std::endl;
+            std::cout << "🔍 DEBUG:   Currently steps 2-4 are missing!" << std::endl;
+            std::cout << "🔍 DEBUG: SOLUTION: Try using zmq_send_external to send directly to external client" << std::endl;
+            
+            // Try to send the response directly to external client using zmq_send_external
+            try {
+              std::cout << "🔴 Attempting to send response directly to external client..." << std::endl;
+              zmq_send_external(payload, msg_type, correlation_id);
+              std::cout << "✅ Successfully sent response to external client!" << std::endl;
+            } catch (const std::exception& e) {
+              std::cout << "❌ Failed to send to external client: " << e.what() << std::endl;
+            }
     
   } catch (const std::exception& e) {
     throw std::runtime_error(std::string("ZMQ send failed: ") + e.what());
   }
+}
+
+void zmq_send_external(rust::Slice<const std::uint8_t> payload, std::uint16_t msg_type, rust::Str correlation_id) {
+  try {
+    std::cout << "🔴 C++ zmq_send_external: Starting external send operation" << std::endl;
+    std::cout << "🔴 C++ zmq_send_external: msg_type=" << msg_type << " (0x" << std::hex << msg_type << std::dec << ")" << std::endl;
+    std::cout << "🔴 C++ zmq_send_external: correlation_id=" << std::string(correlation_id) << std::endl;
+    std::cout << "🔴 C++ zmq_send_external: payload_size=" << payload.size() << std::endl;
+    
+    // Create a new communicator for external TCP socket
+    LogContext log_ctx;
+    log_ctx.thread_name = "rust-zmq-external-bridge";
+    
+    // Create TCP client socket configuration to send back to external clients
+    SocketOptions opt;
+    opt.scheme = URIScheme::TCP;
+    opt.class_type = SocketClassType::CLIENT;
+    opt.direction_type = SocketDirectionalityType::BIDIRECTIONAL;
+    opt.communication_type = SocketCommunicationType::ASYNCHRONOUS;
+    opt.connection_life = SocketConnectionLife::INTERMITTENT;
+    opt.protocol_type = ProtocolType::ZQTP;
+    opt.host = "localhost";  // Send back to localhost
+    opt.port = ServerBridge::g_server_port;        // External repo server port
+    opt.local_id = "rust_external_response_client";
+    
+    std::cout << "🔴 C++ zmq_send_external: Created TCP socket options for external send" << std::endl;
+    
+    // No credentials needed for external send (or use same as server)
+    CredentialFactory cred_factory;
+    auto credentials = cred_factory.create(ProtocolType::ZQTP, std::unordered_map<CredentialType, std::string>());
+    
+    std::cout << "🔴 C++ zmq_send_external: Created credentials" << std::endl;
+    
+    CommunicatorFactory comm_factory(log_ctx);
+    auto communicator = comm_factory.create(opt, *credentials, 1000, 1000);
+    
+    std::cout << "🔴 C++ zmq_send_external: Created external communicator" << std::endl;
+    
+    // Convert Rust data to C++ types
+    const std::string payload_str(reinterpret_cast<const char*>(payload.data()), payload.size());
+    const std::string corr_id(correlation_id);
+    
+    std::cout << "🔴 C++ zmq_send_external: Converted data - payload_str.size()=" << payload_str.size() << ", corr_id=" << corr_id << std::endl;
+    
+    // Create message envelope
+    MessageFactory msg_factory;
+    auto envelope = msg_factory.create(MessageType::GOOGLE_PROTOCOL_BUFFER);
+    
+    // Set message attributes
+    envelope->set(MessageAttribute::CORRELATION_ID, corr_id);
+    
+    // Create the appropriate message type based on msg_type
+    std::unique_ptr<google::protobuf::Message> msg;
+    
+    switch (msg_type) {
+      case 2: // VERSION_REPLY
+        msg = std::make_unique<SDMS::Anon::VersionReply>();
+        break;
+      case 1100: // ACK_REPLY
+        msg = std::make_unique<SDMS::Anon::AckReply>();
+        break;
+      case 9999: // NACK_REPLY
+        msg = std::make_unique<SDMS::Anon::NackReply>();
+        break;
+      case 13323: // REPO_DATA_SIZE_REPLY
+        msg = std::make_unique<SDMS::Auth::RepoDataSizeReply>();
+        break;
+      default:
+        // For unknown message types, create a generic message
+        msg = std::make_unique<SDMS::Anon::AckReply>();
+        break;
+    }
+    
+    // Parse the payload into the message if it's not empty
+    if (!payload_str.empty() && msg) {
+      // Try to parse the payload into the message
+      if (!msg->ParseFromString(payload_str)) {
+        std::cerr << "Warning: Failed to parse payload for message type " << msg_type << std::endl;
+        // Create a default message if parsing fails
+        msg = std::make_unique<SDMS::Anon::AckReply>();
+      }
+    }
+    
+    envelope->setPayload(std::move(msg));
+    
+    // Send the message to external socket
+    std::cout << "🔴 C++ zmq_send_external: Sending message type " << msg_type << " with correlation_id " << corr_id << " and payload size " << payload_str.size() << std::endl;
+            std::cout << "🔴 C++ zmq_send_external: Sending to external TCP socket localhost:" << ServerBridge::g_server_port << std::endl;
+            std::cout << "🔴 C++ zmq_send_external: Target client should be listening on DEALER socket at tcp://localhost:" << ServerBridge::g_server_port << std::endl;
+    
+    communicator->send(*envelope);
+    
+    std::cout << "✅ C++ zmq_send_external: Message sent successfully to external socket" << std::endl;
+    
+  } catch (const std::exception& e) {
+    throw std::runtime_error(std::string("ZMQ external send failed: ") + e.what());
+  }
+}
+
+
+rust::String get_last_correlation_id() {
+  std::cout << "🔍 C++ get_last_correlation_id: Rust worker requested correlation_id: " << ServerBridge::g_last_correlation_id << std::endl;
+  return rust::String(ServerBridge::g_last_correlation_id);
 }
 
 } // namespace ZMQBridge

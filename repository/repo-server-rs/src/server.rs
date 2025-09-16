@@ -52,7 +52,7 @@ impl RepoServer {
         let repo_private_key = self.cfg.load_repo_private_key()
             .unwrap_or_else(|e| panic!("Failed to load repo private key: {}", e));
         
-        crate::ffi::repo::server_start(&self.cfg.core_server, &repo_public_key, &repo_private_key)
+        crate::ffi::repo::server_start(&self.cfg.core_server, &repo_public_key, &repo_private_key, self.cfg.port)
             .unwrap_or_else(|e| panic!("Failed to start ZMQ proxy: {}", e));
         println!("ZMQ proxy started successfully");
         
