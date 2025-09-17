@@ -32,6 +32,7 @@ pub enum ErrorCode {
 #[derive(Debug, Clone)]
 pub enum MessagePayload {
     Empty,
+    Data(Vec<u8>), // Raw bytes for generic data
     Nack(NackReply),
     Ack(AckReply),
     VersionRequest(VersionRequest),
@@ -93,6 +94,14 @@ impl Message {
     pub fn get_payload_mut(&mut self) -> &mut MessagePayload {
         &mut self.payload
     }
+    
+    pub fn set_message_type(&mut self, message_type: u16) {
+        self.message_type = message_type;
+    }
+    
+    pub fn set_payload(&mut self, payload: MessagePayload) {
+        self.payload = payload;
+    }
 
     /// Deserialize a message from raw bytes
     pub fn deserialize(data: &[u8]) -> Result<Message, Box<dyn std::error::Error>> {
@@ -150,6 +159,7 @@ impl Message {
         // Add payload data
         let payload_data = match &self.payload {
             MessagePayload::Empty => Vec::new(),
+            MessagePayload::Data(data) => data.clone(),
             MessagePayload::Nack(nack) => nack.serialize()?,
             MessagePayload::Ack(ack) => ack.serialize()?,
             MessagePayload::VersionRequest(req) => req.serialize()?,

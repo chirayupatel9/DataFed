@@ -44,6 +44,18 @@ mod ffi {
         
         #[namespace = "ZMQBridge"]
         fn get_last_correlation_id() -> String;
+        
+        #[namespace = "ZMQBridge"]
+        fn get_last_context() -> u16;
+        
+        #[namespace = "ZMQBridge"]
+        fn create_response_envelope(request_payload: &[u8], request_msg_type: u16, request_correlation_id: &str, request_route: &str) -> Result<Vec<u8>>;
+        
+        #[namespace = "ZMQBridge"]
+        fn create_response_envelope_from_request(original_request: &[u8], response_payload: &[u8], response_msg_type: u16, context: u16) -> Result<Vec<u8>>;
+        
+        #[namespace = "ZMQBridge"]
+        fn send_response_through_proxy(response_payload: &[u8], response_msg_type: u16, correlation_id: &str, context: u16);
     }
 }
 pub use ffi::*;

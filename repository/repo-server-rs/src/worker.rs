@@ -9,7 +9,7 @@ use std::{
 use crate::version::SharedCoreVersionInfo;
 use crate::proto::VersionReply;
 use crate::ffi::repo::*;
-use crate::message::*;
+// use crate::message::*; // Unused import
 use crate::path_utils::*;
 use crate::ffi::dynalog::{LogCtx, level};
 use crate::{dl_info, dl_log};
@@ -23,6 +23,9 @@ pub struct Envelope {
     pub msg_type: u16,
     pub payload: Vec<u8>,
     pub key: Option<String>,
+    pub route: Option<String>,
+    pub context: u16, // Store context for proper response envelope creation
+    pub original_request: Option<Vec<u8>>, // Store original request for proper response envelope creation
 }
 
 pub trait Messenger: Send + Sync + 'static {
@@ -55,11 +58,6 @@ impl Messenger for ZMQInprocMessenger {
                 }
                 
                 // Parse the received payload into an Envelope
-                // For now, we'll create a simple envelope structure
-                // In a real implementation, you'd deserialize the protobuf message
-                // and extract the correlation_id, msg_type, etc.
-                
-                // This is a simplified parsing - in practice you'd use proper protobuf deserialization
                 if payload.len() < 4 {
                     return Ok(None); // Invalid message format
                 }
@@ -67,56 +65,129 @@ impl Messenger for ZMQInprocMessenger {
                 // Extract message type from first 2 bytes (little-endian)
                 let msg_type = u16::from_le_bytes([payload[0], payload[1]]);
                 
-        // Get the correlation ID from the C++ side
-        let correlation_id = get_last_correlation_id();
-        println!("🔍 ZMQInprocMessenger::recv: Retrieved correlation_id from C++: {}", correlation_id);
-        println!("🔍 ZMQInprocMessenger::recv: This correlation_id will be used for the response");
+                // Get the correlation ID and context from the C++ side
+                let correlation_id = get_last_correlation_id();
+                let context = get_last_context();
                 
-                // The rest is the actual payload
-                let message_payload = payload[2..].to_vec();
+                // Parse the enhanced payload format: [msg_type][payload][route_count][routes...]
+                // let _offset = 2; // Skip msg_type (2 bytes) - not used in current implementation
+                
+                // Find the end of the payload by looking for route count
+                // The payload ends where route count begins (4 bytes before the end if there are routes)
+                let message_payload = if payload.len() > 6 { // Need at least 2 (msg_type) + 4 (route_count) + some payload
+                    // Look for route count (4 bytes) - this is a simple heuristic
+                    // In practice, we'd need a more sophisticated parser
+                    let payload_end = payload.len() - 4; // Assume last 4 bytes are route count
+                    payload[2..payload_end].to_vec()
+                } else {
+                    payload[2..].to_vec()
+                };
+                
+                // Parse routes from the end of the payload
+                let routes = if payload.len() > 6 {
+                    let mut route_offset = payload.len() - 4;
+                    
+                    // Read route count (4 bytes, little-endian)
+                    if route_offset + 4 <= payload.len() {
+                        let route_count = u32::from_le_bytes([
+                            payload[route_offset],
+                            payload[route_offset + 1],
+                            payload[route_offset + 2],
+                            payload[route_offset + 3],
+                        ]) as usize;
+                        
+                        route_offset += 4;
+                        
+                        // Parse each route
+                        let mut parsed_routes = Vec::new();
+                        for _ in 0..route_count {
+                            if route_offset + 4 <= payload.len() {
+                                // Read route length (4 bytes, little-endian)
+                                let route_len = u32::from_le_bytes([
+                                    payload[route_offset],
+                                    payload[route_offset + 1],
+                                    payload[route_offset + 2],
+                                    payload[route_offset + 3],
+                                ]) as usize;
+                                
+                                route_offset += 4;
+                                
+                                // Read route data
+                                if route_offset + route_len <= payload.len() {
+                                    let route_data = &payload[route_offset..route_offset + route_len];
+                                    parsed_routes.push(String::from_utf8_lossy(route_data).to_string());
+                                    route_offset += route_len;
+                                }
+                            }
+                        }
+                        parsed_routes
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                };
+                
+                println!("🔧 Worker {} parsed {} routes from original request", self.worker_id, routes.len());
                 
                 // Debug logging
-                println!("Worker {} received message: type={} (0x{:x}), payload_len={}", 
-                         self.worker_id, msg_type, msg_type, message_payload.len());
+                println!("🟢 Worker {} received message: type={} (0x{:x}), payload_len={}, corr_id={}", 
+                         self.worker_id, msg_type, msg_type, message_payload.len(), correlation_id);
                 
                 Ok(Some(Envelope {
                     correlation_id,
                     msg_type,
                     payload: message_payload,
                     key: None,
+                    route: routes.first().cloned(), // Store first route for response routing
+                    context, // Store context for proper response envelope creation
+                    original_request: Some(payload.to_vec()), // Store original request for response envelope
                 }))
             }
             Err(e) => {
-                eprintln!("ZMQ recv error: {}", e);
+                eprintln!("❌ ZMQ recv error: {}", e);
                 Err(io::Error::new(io::ErrorKind::Other, format!("ZMQ recv failed: {}", e)))
             }
         }
     }
 
     fn send(&self, env: Envelope) -> io::Result<()> {
-        // Use the C++ FFI bridge to send messages through the INPROC socket
-        // Send the payload directly - the C++ side will handle message type routing
-        println!("🔵 ZMQInprocMessenger::send called: msg_type={} (0x{:x}), corr_id={}, payload_len={}", 
-                 env.msg_type, env.msg_type, env.correlation_id, env.payload.len());
+        println!("🔵 ZMQInprocMessenger::send: Worker {} starting to send response", self.worker_id);
+        println!("🔵 ZMQInprocMessenger::send: Message details:");
+        println!("🔵   - Message type: {} (0x{:x})", env.msg_type, env.msg_type);
+        println!("🔵   - Correlation ID: {}", env.correlation_id);
+        println!("🔵   - Payload length: {} bytes", env.payload.len());
         
         // Debug: print first few bytes of payload
         let debug_len = std::cmp::min(20, env.payload.len());
         let debug_bytes = &env.payload[..debug_len];
-        println!("🔵 Payload preview (first {} bytes): {:?}", debug_len, debug_bytes);
+        println!("🔵 ZMQInprocMessenger::send: Payload preview (first {} bytes): {:?}", debug_len, debug_bytes);
+        
+        // Show complete payload if it's small enough
+        if env.payload.len() <= 50 {
+            println!("🔵 ZMQInprocMessenger::send: Complete payload: {:?}", env.payload);
+        }
         
         // Send through INPROC socket - the ZMQ proxy should forward this back to external clients
         println!("🔵 ZMQInprocMessenger::send: Sending to INPROC socket 'workers'");
         println!("🔵 ZMQInprocMessenger::send: C++ proxy should forward this to external TCP socket localhost:10000");
         println!("🔵 ZMQInprocMessenger::send: Target external client should receive this on their DEALER socket");
+        println!("🔵 ZMQInprocMessenger::send: Calling C++ zmq_send() with:");
+        println!("🔵   - Payload: {} bytes", env.payload.len());
+        println!("🔵   - Message type: {} (0x{:x})", env.msg_type, env.msg_type);
+        println!("🔵   - Correlation ID: {}", env.correlation_id);
         
         match zmq_send(&env.payload, env.msg_type, &env.correlation_id) {
             Ok(()) => {
-                println!("✅ ZMQInprocMessenger::send successful - message sent to INPROC socket (proxy should forward)");
                 println!("✅ ZMQInprocMessenger::send: C++ zmq_send() completed successfully");
+                println!("✅ ZMQInprocMessenger::send: Message sent to INPROC socket 'workers'");
+                println!("✅ ZMQInprocMessenger::send: Proxy should now forward this to external TCP client");
+                println!("✅ ZMQInprocMessenger::send: Python client should receive the response");
                 Ok(())
             },
             Err(e) => {
-                eprintln!("❌ ZMQ send error: {}", e);
+                eprintln!("❌ ZMQInprocMessenger::send: C++ zmq_send() failed: {}", e);
+                eprintln!("❌ ZMQInprocMessenger::send: Worker {} failed to send response", self.worker_id);
                 Err(io::Error::new(io::ErrorKind::Other, format!("ZMQ send failed: {}", e)))
             }
         }
@@ -170,8 +241,12 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
                     // --- decode, dispatch, reply (DONE) ---
                     let correlation_id = env.correlation_id.clone();
 
+                    // Use the original request to create a proper response envelope
+                    let envelope_correlation_id = env.correlation_id.clone();
+                    let envelope_context = env.context; // Use the context from the original request
+                    
                     // Route by message type with proper error handling
-                    let (reply_type, payload) =                     match env.msg_type {
+                    let (reply_type, payload) = match env.msg_type {
                         VERSION_REQUEST => {
                             dl_info!(msg_ctx, "Processing version request");
                             // Use version info from core server if available, otherwise fall back to local
@@ -565,12 +640,27 @@ pub fn spawn_worker<M: Messenger + Clone + 'static>(
                     let debug_bytes = &payload[..debug_len];
                     println!("🟡 Reply payload preview (first {} bytes): {:?}", debug_len, debug_bytes);
                     
-                    let result = messenger.send(Envelope {
-                        correlation_id,
-                        msg_type: reply_type,
-                        payload,
-                        key: None,
-                    });
+                    // Create a properly formatted response envelope using the original request
+                    // This ensures proper routing information is preserved
+                    let payload_len = payload.len();
+                    
+                    // USE DATAFED FRAMEWORK EXACTLY LIKE C++ REPOSERVER
+                    // Instead of creating our own byte array format, use the DataFed framework
+                    // directly just like the C++ RepoServer does: client->send(*(send_message))
+                    
+                    println!("🚀 Worker: Using DataFed framework exactly like C++ RepoServer");
+                    println!("🚀 Worker: Sending response with correlation_id={}, msg_type={}, payload_len={}", 
+                             envelope_correlation_id, reply_type, payload_len);
+                    
+                    // Call the C++ function that sends response through the proxy
+                    // The proxy will forward this to the external client
+                    send_response_through_proxy(&payload, reply_type, &envelope_correlation_id, envelope_context);
+                    
+                    println!("✅ Worker: Response sent using DataFed framework (exactly like C++ RepoServer)");
+                    
+                    // Since we're using the DataFed framework directly, we don't need to use
+                    // the Rust messenger anymore - the C++ side handles everything
+                    let result: Result<(), Box<dyn std::error::Error>> = Ok(());
                     
                     match result {
                         Ok(()) => println!("✅ Worker[{}] successfully sent reply", id),

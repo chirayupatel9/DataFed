@@ -28,4 +28,9 @@ namespace ZMQBridge {
     void zmq_send(rust::Slice<const std::uint8_t> payload, std::uint16_t msg_type, rust::Str correlation_id);
     void zmq_send_external(rust::Slice<const std::uint8_t> payload, std::uint16_t msg_type, rust::Str correlation_id);
     rust::String get_last_correlation_id();
+    std::uint16_t get_last_context();
+    rust::Vec<std::uint8_t> create_response_envelope(rust::Slice<const std::uint8_t> request_payload, std::uint16_t request_msg_type, rust::Str request_correlation_id, rust::Str request_route);
+
+rust::Vec<std::uint8_t> create_response_envelope_from_request(rust::Slice<const std::uint8_t> original_request, rust::Slice<const std::uint8_t> response_payload, std::uint16_t response_msg_type, std::uint16_t context);
+void send_response_through_proxy(rust::Slice<const std::uint8_t> response_payload, std::uint16_t response_msg_type, rust::Str correlation_id, std::uint16_t context);
 } // namespace ZMQBridge
