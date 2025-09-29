@@ -38,6 +38,7 @@ fn main() {
     ])
     .include("/mnt/storage/opt/datafed/dependencies")
     .include("/mnt/storage/datafed_rs/DataFed/common/include")
+    .include("/mnt/storage/datafed_rs/DataFed/common/source")
     .include("/mnt/storage/datafed_rs/DataFed/build/common/proto")
     .include("./include")
     .include("/mnt/storage/opt/datafed/dependencies/include")
